@@ -1,8 +1,7 @@
-# Runs discover.py from a Linux container with Microsoft ODBC Driver 18 -- the
-# same driver and OpenSSL stack the collector will use, so a successful run here
-# also proves the network path and TLS settings work from the Docker host.
+# The collector: the only component that connects to site SQL Server databases.
 FROM python:3.12-slim-bookworm
 
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl gnupg ca-certificates unixodbc \
  && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
@@ -14,10 +13,14 @@ RUN apt-get update \
  && apt-get purge -y curl gnupg && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir pyodbc==5.2.0
-
 WORKDIR /app
-COPY discover.py .
-RUN useradd --create-home discovery && mkdir /out && chown discovery /out
-USER discovery
-ENTRYPOINT ["python", "discover.py", "--out-dir", "/out"]
+COPY requirements.txt requirements-collector.txt ./
+RUN pip install --no-cache-dir -r requirements-collector.txt
+COPY graintime ./graintime
+
+RUN useradd --uid 10001 --create-home graintime
+USER graintime
+EXPOSE 8081
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=4).status == 200 else 1)"
+CMD ["python", "-m", "graintime.collector.main"]

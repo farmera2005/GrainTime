@@ -1,7 +1,8 @@
 /*
   GrainTime: TEMPORARY discovery login for ONE site database.
 
-  Run this in SSMS (or sqlcmd) as a sysadmin at the discovery site. It creates a
+  Run this in SSMS as a sysadmin at the discovery site (site preparation; the
+  GrainTime app itself is configured entirely in the browser). It creates a
   SQL-authentication login that can read the database's tables and catalog, and
   nothing else. It is only for Phase 0 discovery; once the mapping is
   confirmed, a narrower login (SELECT on the mapped tables only) replaces it,

@@ -1,50 +1,30 @@
-#!/usr/bin/env python3
-"""Read-only schema discovery for one CompuWeigh site database.
+"""Schema discovery for one site database (Phase 0), run by the collector.
 
-Connects to a single SQL Server database and reports what is needed to design
-the mapping profile for the Truck Times collector:
+Started from the setup wizard or the admin panel; the api queues a
+`discovery` job and the collector runs it. Reports what is needed to design
+the mapping profile: version/edition, tables and columns, metadata row counts,
+indexes, foreign keys, triggers, a few recent sample rows from ticket-like
+tables (name/plate/address-like text masked), value distributions for
+status/void/direction-like columns from a bounded recent sample, and the date
+range of indexed date columns.
 
-  * SQL Server version, edition, collation, server clock and UTC offset
-  * every table and view with its columns (INFORMATION_SCHEMA)
-  * row counts from partition metadata (no table scans)
-  * indexes, foreign keys and triggers
-  * a few recent sample rows from tables that look like tickets / weighs
-  * value distributions for status / void / direction-like columns, taken
-    from a bounded sample of the most recent rows only
-  * oldest/newest values of indexed date columns (index seeks only)
-
-Safety (these are production scale systems):
-  * SELECT statements only. Nothing is created, written or altered.
-  * One connection, 5 s connect timeout, 15 s command timeout.
-  * READ UNCOMMITTED, LOCK_TIMEOUT 5 s, DEADLOCK_PRIORITY LOW.
-  * Every data query is bounded with TOP; no COUNT(*), no unbounded scans.
-  * The password is never printed or written anywhere, nor is the
-    connection string built from it.
-
-Usage:
-  python discover.py --host 10.1.2.3 --port 1433 --database CompuWeigh \
-      --user graintime_discovery [--trust-server-certificate] [--out-dir out]
-
-The password is read from the DISCOVERY_PASSWORD environment variable, or
-prompted for if that is not set.
+Safety: SELECT only; every data query is bounded with TOP; row counts come
+from partition metadata; no COUNT(*) over whole tables, no unbounded scans.
+The connection itself comes from sitedb.connect (timeouts, READ UNCOMMITTED).
 """
 
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import decimal
-import getpass
-import json
-import os
 import re
-import socket
-import sys
 import time
 import uuid
+from dataclasses import dataclass, field
+from typing import Callable
 
-CONNECT_TIMEOUT_S = 5
-COMMAND_TIMEOUT_S = 15
+from .sitedb import tls_assessment
+
 PAUSE_BETWEEN_QUERIES_S = 0.1
 
 # Table names that suggest scale tickets, weighs, or the lookups they reference.
@@ -79,110 +59,6 @@ SKIP_SAMPLE_TYPES = {"image", "text", "ntext", "xml", "binary", "varbinary",
 GROUPABLE_TYPES = {"bit", "tinyint", "smallint", "int", "bigint", "char", "nchar",
                    "varchar", "nvarchar", "decimal", "numeric"}
 
-
-# --------------------------------------------------------------------------- #
-# Connection
-# --------------------------------------------------------------------------- #
-
-def _odbc_quote(value: str) -> str:
-    return "{" + value.replace("}", "}}") + "}"
-
-
-def connect(args, password: str):
-    import pyodbc  # imported here so --help works without the driver installed
-
-    parts = [
-        f"DRIVER={{{args.driver}}}",
-        f"SERVER=tcp:{args.host},{args.port}",
-        f"DATABASE={_odbc_quote(args.database)}",
-        f"UID={_odbc_quote(args.user)}",
-        f"PWD={_odbc_quote(password)}",
-        f"Encrypt={args.encrypt}",
-        f"TrustServerCertificate={'yes' if args.trust_server_certificate else 'no'}",
-        "ApplicationIntent=ReadOnly",
-        "APP=GrainTime-Discovery",
-    ]
-    conn = pyodbc.connect(";".join(parts), timeout=CONNECT_TIMEOUT_S,
-                          autocommit=True, readonly=True)
-    conn.timeout = COMMAND_TIMEOUT_S
-    cur = conn.cursor()
-    cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; "
-                "SET LOCK_TIMEOUT 5000; SET DEADLOCK_PRIORITY LOW;")
-    cur.close()
-    return conn
-
-
-def tcp_probe(host: str, port: int) -> tuple[str, str] | None:
-    """Plain TCP connect before ODBC, so a closed port is told apart from an
-    unreachable host (the driver reports both as "Login timeout expired")."""
-    try:
-        socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return ("Host name does not resolve",
-                "Check the host name, or use the server's IP address.")
-    try:
-        with socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_S):
-            return None
-    except ConnectionRefusedError:
-        return ("Port closed (connection refused)",
-                "Host is reachable but nothing listens on that port: enable TCP/IP in SQL Server "
-                "Configuration Manager, set a static TCP port, restart the SQL service.")
-    except (socket.timeout, TimeoutError):
-        return ("Host unreachable or port filtered (no answer within "
-                f"{CONNECT_TIMEOUT_S} s)",
-                "Check the network path from this machine, and that Windows Firewall at the site "
-                "allows inbound TCP on the SQL port from this host.")
-    except OSError as exc:
-        return (f"Host unreachable ({exc.strerror or exc})",
-                "Check the host address and the network route/VPN from this machine to the site.")
-
-
-def classify_connect_error(exc: Exception) -> tuple[str, str]:
-    """Map a pyodbc connect error to (cause, fix). Never includes the password."""
-    msg = str(exc)
-    low = msg.lower()
-    checks = [
-        (("can't open lib", "data source name not found", "file not found"),
-         "ODBC driver not installed on this machine",
-         "Install Microsoft ODBC Driver 18 for SQL Server, or use the Docker image in this folder."),
-        (("certificate verify failed", "certificate chain", "self signed", "self-signed",
-          "ssl provider: the certificate"),
-         "TLS certificate not trusted",
-         "The server uses a self-signed certificate. Re-run with --trust-server-certificate."),
-        (("unsupported protocol", "protocol version", "wrong version number",
-          "no protocols available", "ssl routines", "tls"),
-         "TLS handshake failed (likely an old TLS version on the server)",
-         "The server may only offer TLS 1.0/1.1. Patch SQL Server for TLS 1.2 support. "
-         "Report the server version so we can plan around it."),
-        (("not associated with a trusted sql server connection",),
-         "SQL authentication (mixed mode) is disabled",
-         "Enable 'SQL Server and Windows Authentication mode' and restart the SQL service."),
-        (("cannot open database", "4060"),
-         "Database not found or login has no user in it",
-         "Check the database name, and that the login is mapped to a user in that database."),
-        (("login failed", "18456"),
-         "Login failed",
-         "Check the login name and password, that the login is enabled, and that mixed "
-         "mode authentication is on."),
-        (("0x274d", "connection refused", "actively refused"),
-         "Port closed (connection refused)",
-         "Host is reachable but nothing listens on that port: enable TCP/IP in SQL Server "
-         "Configuration Manager, set a static TCP port, restart the SQL service."),
-        (("login timeout expired", "0x2749", "timed out", "timeout", "no route to host",
-          "network is unreachable", "server is not found", "name or service not known"),
-         "Host unreachable or port filtered",
-         "Check the host name/IP, the network path from this machine, and that Windows "
-         "Firewall at the site allows inbound TCP on the SQL port from this host."),
-    ]
-    for needles, cause, fix in checks:
-        if any(n in low for n in needles):
-            return cause, fix
-    return "Unclassified connection error", "See the raw driver message above."
-
-
-# --------------------------------------------------------------------------- #
-# Query helpers
-# --------------------------------------------------------------------------- #
 
 def jsonable(v):
     if isinstance(v, (dt.datetime, dt.date, dt.time)):
@@ -254,27 +130,6 @@ def connection_info(conn):
         FROM sys.dm_exec_connections WHERE session_id = @@SPID
     """)
     return rows[0] if rows else None
-
-
-def tls_assessment(product_version: str) -> str:
-    try:
-        major, minor, build = (int(x) for x in product_version.split(".")[:3])
-    except Exception:
-        return "Could not parse version."
-    if major >= 13:
-        return "SQL Server 2016 or later: TLS 1.2 supported natively. No TLS concern."
-    if major == 12:
-        ok = build >= 4439  # 2014 SP1 CU5 and later / SP2+
-        return ("SQL Server 2014: TLS 1.2 " + ("supported at this build." if ok else
-                "requires SP1 CU5 or SP2+. This build may be affected."))
-    if major == 11:
-        ok = build >= 6020  # 2012 SP3 + TLS update / SP4
-        return ("SQL Server 2012: TLS 1.2 " + ("supported at this build." if ok else
-                "requires SP3 with the TLS 1.2 update or SP4. This build may be affected."))
-    if major == 10:
-        return ("SQL Server 2008 / 2008 R2: TLS 1.2 only with a specific post-SP update. "
-                "AFFECTED unless that update is installed; flag this site.")
-    return "SQL Server older than 2008: AFFECTED; current Linux drivers will not connect."
 
 
 def tables_and_columns(conn):
@@ -413,9 +268,11 @@ def sample_table(conn, key, cols, idx_rows, n, mask):
     col_sql = ", ".join(qi(c) for c in selectable)
     sql = f"SELECT TOP ({int(n)}) {col_sql} FROM {fq}{order_sql}"
     _, rows = q(conn, sql)
-    rows = [{k: mask_value(k, v, mask) for k, v in r.items()} for r in rows]
+    # Columns + value lists rather than dicts: the report is stored as JSONB,
+    # which does not keep object key order.
     return {"ordered_by": order_cols or "(no clustered index: arbitrary rows)",
-            "omitted_columns": omitted, "rows": rows}
+            "omitted_columns": omitted, "columns": selectable,
+            "rows": [[mask_value(c, r[c], mask) for c in selectable] for r in rows]}
 
 
 def distributions(conn, key, cols, idx_rows, sample_rows, mask, errors):
@@ -483,7 +340,9 @@ def render_markdown(rep):
     L.append(f"Target: {rep['target']}\n")
     L.append("## Server\n")
     L.append(md_table([{"property": k, "value": v} for k, v in s.items()]))
-    L.append(f"\n**TLS assessment:** {rep.get('tls_assessment')}\n")
+    tls = rep.get("tls_assessment") or {}
+    flag = {True: "AFFECTED. ", False: "", None: ""}.get(tls.get("affected"), "")
+    L.append(f"\n**TLS assessment:** {flag}{tls.get('note', '')}\n")
     if rep.get("connection"):
         L.append("\n**This connection:** " + ", ".join(f"{k}={v}" for k, v in rep["connection"].items()) + "\n")
     L.append("\n## Tables (approximate rows from metadata)\n")
@@ -514,7 +373,7 @@ def render_markdown(rep):
             L.append(f"\n**Sample rows** (ordered by: {smp['ordered_by']})\n")
             if smp["omitted_columns"]:
                 L.append(f"Omitted large/binary columns: {', '.join(smp['omitted_columns'])}\n")
-            L.append(md_table(smp["rows"]))
+            L.append(md_table([dict(zip(smp["columns"], r)) for r in smp["rows"]], smp["columns"]))
         dist = c.get("distributions")
         if dist and dist["columns"]:
             L.append(f"\n**Value distributions** (from {dist['from_most_recent_rows']} most recent rows)\n")
@@ -540,113 +399,87 @@ def render_markdown(rep):
     return "\n".join(L) + "\n"
 
 
+
+
 # --------------------------------------------------------------------------- #
-# Main
+# Entry point used by the collector job runner
 # --------------------------------------------------------------------------- #
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description="Read-only schema discovery for a CompuWeigh site database.")
-    p.add_argument("--host", required=True, help="Host name or IP of the site SQL Server")
-    p.add_argument("--port", type=int, default=1433, help="Static TCP port (default 1433)")
-    p.add_argument("--database", required=True)
-    p.add_argument("--user", required=True, help="SQL login (SQL authentication)")
-    p.add_argument("--encrypt", choices=["yes", "no", "strict"], default="yes")
-    p.add_argument("--trust-server-certificate", action="store_true",
-                   help="Accept a self-signed server certificate")
-    p.add_argument("--driver", default="ODBC Driver 18 for SQL Server")
-    p.add_argument("--table", action="append", default=[],
-                   help="Extra table to treat as a candidate (repeatable; name or schema.name)")
-    p.add_argument("--max-candidates", type=int, default=25)
-    p.add_argument("--sample-rows", type=int, default=5)
-    p.add_argument("--distribution-rows", type=int, default=2000,
-                   help="How many recent rows to use for value distributions")
-    p.add_argument("--no-samples", action="store_true", help="Skip sample rows and distributions")
-    p.add_argument("--no-mask", action="store_true",
-                   help="Do not mask name/plate/address-like text columns in samples")
-    p.add_argument("--out-dir", default=".", help="Where to write report.md and report.json")
-    args = p.parse_args(argv)
-    if not 1 <= args.port <= 65535:
-        p.error("--port must be 1-65535")
-    args.sample_rows = max(1, min(args.sample_rows, 20))
-    args.distribution_rows = max(100, min(args.distribution_rows, 10000))
+class Cancelled(Exception):
+    pass
 
-    password = os.environ.get("DISCOVERY_PASSWORD") or getpass.getpass("SQL password: ")
-    target = f"{args.host}:{args.port} / {args.database} as {args.user}"
-    print(f"Connecting to {target} (encrypt={args.encrypt}, "
-          f"trust_cert={args.trust_server_certificate}) ...", file=sys.stderr)
 
-    probe = tcp_probe(args.host, args.port)
-    if probe:
-        print(f"\nCONNECTION FAILED: {probe[0]}\nFix: {probe[1]}", file=sys.stderr)
-        return 2
-    try:
-        conn = connect(args, password)
-    except Exception as exc:
-        cause, fix = classify_connect_error(exc)
-        print(f"\nCONNECTION FAILED: {cause}\nFix: {fix}\n\nDriver message:\n  {exc}", file=sys.stderr)
-        return 2
-    finally:
-        password = None  # noqa: F841 - drop the reference as early as possible
+@dataclass
+class DiscoveryOptions:
+    extra_tables: list[str] = field(default_factory=list)
+    max_candidates: int = 25
+    sample_rows: int = 5
+    distribution_rows: int = 2000
+    include_samples: bool = True
+    mask: bool = True
 
+    def clamp(self) -> "DiscoveryOptions":
+        self.max_candidates = max(1, min(int(self.max_candidates), 50))
+        self.sample_rows = max(1, min(int(self.sample_rows), 20))
+        self.distribution_rows = max(100, min(int(self.distribution_rows), 10000))
+        return self
+
+
+def run_discovery(conn, target: str, opts: DiscoveryOptions,
+                  on_progress: Callable[[dict], None] = lambda p: None,
+                  should_cancel: Callable[[], bool] = lambda: False) -> dict:
+    """Run every discovery step on an open site connection. Steps that fail
+    (usually a missing optional permission) are recorded and skipped."""
+    opts.clamp()
     errors: list = []
-    rep: dict = {"generated_at": dt.datetime.now().astimezone().isoformat(), "target": target,
-                 "errors": errors}
-    try:
-        rep["server"] = safe(errors, "server info", lambda: server_info(conn), {})
-        rep["tls_assessment"] = tls_assessment((rep["server"] or {}).get("product_version", ""))
-        rep["connection"] = safe(errors, "connection info (needs VIEW SERVER STATE; optional)",
-                                 lambda: connection_info(conn))
-        tables, cols = safe(errors, "tables and columns", lambda: tables_and_columns(conn), ([], []))
-        rep["tables"], rep["columns"] = tables, cols
-        rep["row_counts"] = safe(errors, "row counts", lambda: row_counts(conn), [])
-        idx = safe(errors, "indexes", lambda: indexes(conn), [])
-        rep["foreign_keys"] = safe(errors, "foreign keys", lambda: foreign_keys(conn), [])
-        rep["triggers"] = safe(errors, "triggers", lambda: triggers(conn), [])
+    rep: dict = {"generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                 "target": target, "errors": errors}
 
-        cols_by_table: dict = {}
-        for c in cols:
-            cols_by_table.setdefault((c["schema"], c["table"]), []).append(c)
-        counts = {(r["schema"], r["table"]): r["approx_rows"] for r in rep["row_counts"]}
-        extra = {t.lower() for t in args.table}
-        cand_keys = pick_candidates(tables, cols_by_table, counts, extra)[: args.max_candidates]
-        print(f"Found {len(tables)} tables/views; {len(cand_keys)} candidate tables.", file=sys.stderr)
+    def step(label, done, total):
+        if should_cancel():
+            raise Cancelled()
+        on_progress({"step": label, "done": done, "total": total})
 
-        rep["candidates"] = []
-        for key in cand_keys:
-            label = f"{key[0]}.{key[1]}"
-            print(f"  inspecting {label}", file=sys.stderr)
-            tcols = cols_by_table.get(key, [])
-            entry = {
-                "table": label,
-                "approx_rows": counts.get(key, "view/unknown"),
-                "columns": tcols,
-                "indexes": [r for r in idx if (r["schema"], r["table"]) == key],
-                "triggers": [r for r in rep["triggers"] if (r["schema"], r["table"]) == key],
-                "foreign_keys": [r for r in rep["foreign_keys"] if (r["schema"], r["table"]) == key],
-                "date_ranges": date_ranges(conn, key, tcols, idx, errors),
-            }
-            if not args.no_samples:
-                entry["sample"] = safe(errors, f"sample {label}",
-                                       lambda: sample_table(conn, key, tcols, idx, args.sample_rows,
-                                                            not args.no_mask))
-                entry["distributions"] = distributions(conn, key, tcols, idx, args.distribution_rows,
-                                                       not args.no_mask, errors)
-            rep["candidates"].append(entry)
-    finally:
-        conn.close()
+    step("server", 0, 1)
+    rep["server"] = safe(errors, "server info", lambda: server_info(conn), {})
+    rep["tls_assessment"] = tls_assessment((rep["server"] or {}).get("product_version", ""))
+    rep["connection"] = safe(errors, "connection info (needs VIEW SERVER STATE; optional)",
+                             lambda: connection_info(conn))
+    step("catalog", 0, 1)
+    tables, cols = safe(errors, "tables and columns", lambda: tables_and_columns(conn), ([], []))
+    rep["tables"], rep["columns"] = tables, cols
+    rep["row_counts"] = safe(errors, "row counts", lambda: row_counts(conn), [])
+    idx = safe(errors, "indexes", lambda: indexes(conn), [])
+    rep["foreign_keys"] = safe(errors, "foreign keys", lambda: foreign_keys(conn), [])
+    rep["triggers"] = safe(errors, "triggers", lambda: triggers(conn), [])
 
-    os.makedirs(args.out_dir, exist_ok=True)
-    md_path = os.path.join(args.out_dir, "report.md")
-    json_path = os.path.join(args.out_dir, "report.json")
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(render_markdown(rep))
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(rep, f, indent=2, default=jsonable)
-    print(f"\nDone. Wrote {md_path} and {json_path}"
-          + (f" ({len(errors)} non-fatal step errors, listed at the end of the report)" if errors else ""),
-          file=sys.stderr)
-    return 0
+    cols_by_table: dict = {}
+    for c in cols:
+        cols_by_table.setdefault((c["schema"], c["table"]), []).append(c)
+    counts = {(r["schema"], r["table"]): r["approx_rows"] for r in rep["row_counts"]}
+    extra = {t.strip().lower() for t in opts.extra_tables if t.strip()}
+    cand_keys = pick_candidates(tables, cols_by_table, counts, extra)[: opts.max_candidates]
 
-
-if __name__ == "__main__":
-    sys.exit(main())
+    rep["candidates"] = []
+    for i, key in enumerate(cand_keys):
+        label = f"{key[0]}.{key[1]}"
+        step(f"inspecting {label}", i, len(cand_keys))
+        tcols = cols_by_table.get(key, [])
+        entry = {
+            "table": label,
+            "approx_rows": counts.get(key, "view/unknown"),
+            "columns": tcols,
+            "indexes": [r for r in idx if (r["schema"], r["table"]) == key],
+            "triggers": [r for r in rep["triggers"] if (r["schema"], r["table"]) == key],
+            "foreign_keys": [r for r in rep["foreign_keys"] if (r["schema"], r["table"]) == key],
+            "date_ranges": date_ranges(conn, key, tcols, idx, errors),
+        }
+        if opts.include_samples:
+            entry["sample"] = safe(errors, f"sample {label}",
+                                   lambda: sample_table(conn, key, tcols, idx, opts.sample_rows,
+                                                        opts.mask))
+            entry["distributions"] = distributions(conn, key, tcols, idx, opts.distribution_rows,
+                                                   opts.mask, errors)
+        rep["candidates"].append(entry)
+    on_progress({"step": "done", "done": len(cand_keys), "total": len(cand_keys)})
+    return rep

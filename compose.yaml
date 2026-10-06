@@ -1,0 +1,89 @@
+# GrainTime stack. Start it with:   docker compose up -d --build
+# then open http://<this-host>:8080 and follow the setup wizard.
+#
+# Nothing has to be configured first: on first start the `init` service
+# generates the central database password and the site-password encryption key
+# into the `secrets` volume. Sites, users and settings are entered in the
+# browser and stored in the central database.
+
+name: graintime
+
+x-backend: &backend
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.api
+  image: graintime-api:latest
+  volumes:
+    - secrets:/run/graintime-secrets:ro
+  logging: &logging
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  init:
+    <<: *backend
+    command: ["python", "-m", "graintime.common.secrets_init"]
+    user: "0:0"          # writes into the fresh secrets volume
+    volumes:
+      - secrets:/run/graintime-secrets
+    restart: "no"
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: graintime
+      POSTGRES_DB: graintime
+      POSTGRES_PASSWORD_FILE: /run/graintime-secrets/db_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - secrets:/run/graintime-secrets:ro
+    depends_on:
+      init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graintime -d graintime"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    <<: *backend
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  collector:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.collector
+    image: graintime-collector:latest
+    volumes:
+      - secrets:/run/graintime-secrets:ro
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+    logging: *logging
+
+  web:
+    build: ./web
+    image: graintime-web:latest
+    ports:
+      # Internal network only. How (and whether) anything is published to the
+      # internet is decided separately; nothing here exposes it.
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      api: { condition: service_started }
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  pgdata:
+  secrets:

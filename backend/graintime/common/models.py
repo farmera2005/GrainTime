@@ -1,0 +1,115 @@
+"""Central store schema (PostgreSQL). Migrations live in backend/migrations."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import (BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer,
+                        LargeBinary, String, Text, func)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(200), unique=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    # NULL for single sign-on users; local accounts (break-glass admin) only.
+    password_hash: Mapped[str | None] = mapped_column(Text)
+    auth_source: Mapped[str] = mapped_column(String(20), default="local")
+    role: Mapped[str] = mapped_column(String(20))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("role IN ('viewer','admin')", name="ck_users_role"),)
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AppSetting(Base):
+    """Application settings edited in the browser (setup state, global defaults)."""
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class Site(Base):
+    __tablename__ = "sites"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    code: Mapped[str] = mapped_column(String(20), unique=True)
+    address: Mapped[str | None] = mapped_column(Text)
+    map_url: Mapped[str | None] = mapped_column(Text)
+    # Connection. Host + static port, never instance-name resolution.
+    host: Mapped[str] = mapped_column(String(255))
+    port: Mapped[int] = mapped_column(Integer)
+    database_name: Mapped[str] = mapped_column(String(128))
+    username: Mapped[str] = mapped_column(String(128))
+    # Fernet ciphertext. Write-only: never returned by the API, never logged.
+    password_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
+    encrypt: Mapped[str] = mapped_column(String(10), default="yes")
+    trust_server_certificate: Mapped[bool] = mapped_column(Boolean, default=False)
+    poll_interval_s: Mapped[int | None] = mapped_column(Integer)  # NULL = global default
+    polling_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    show_on_dashboard: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_on_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+    __table_args__ = (
+        CheckConstraint("port BETWEEN 1 AND 65535", name="ck_sites_port"),
+        CheckConstraint("encrypt IN ('yes','no','strict')", name="ck_sites_encrypt"),
+    )
+
+
+class CollectorJob(Base):
+    """Work the api hands to the collector, the only component that talks to
+    site databases (test connection, discovery; later preview and backfill)."""
+    __tablename__ = "collector_jobs"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    site_id: Mapped[int | None] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"))
+    # Connection details for testing an unsaved site. The password inside is
+    # Fernet ciphertext and is wiped when the job finishes.
+    params: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    progress: Mapped[dict | None] = mapped_column(JSONB)
+    result: Mapped[dict | None] = mapped_column(JSONB)
+    error: Mapped[dict | None] = mapped_column(JSONB)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint("status IN ('queued','running','succeeded','failed','cancelled')",
+                        name="ck_jobs_status"),
+    )
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    actor_name: Mapped[str] = mapped_column(String(200))
+    action: Mapped[str] = mapped_column(String(100))
+    entity_type: Mapped[str] = mapped_column(String(50))
+    entity_id: Mapped[str | None] = mapped_column(String(100))
+    old_value: Mapped[dict | None] = mapped_column(JSONB)
+    new_value: Mapped[dict | None] = mapped_column(JSONB)
