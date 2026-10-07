@@ -36,6 +36,24 @@ The wizard walks through:
    rows, and shows the report in the browser with download buttons. Send the
    two files to the project team so the mapping profile can be designed.
 
+### If the build fails
+
+The build downloads packages from npm (web), PyPI (api, collector), and the
+Debian and Microsoft package servers (collector). Failures are almost always
+network-related:
+
+- **Just run `docker compose up -d --build` again.** Downloads retry
+  automatically and are cached, so a second run continues where the first
+  stopped.
+- **Behind a proxy or a TLS-inspecting firewall?** Docker needs the proxy
+  configured for builds (Docker Desktop: Settings → Resources → Proxies; Linux:
+  `~/.docker/config.json` `proxies` and the daemon's proxy settings). The
+  inspection CA must be trusted, or `registry.npmjs.org`, `pypi.org`,
+  `files.pythonhosted.org`, `deb.debian.org` and `packages.microsoft.com` must
+  be allowed through.
+- If only one service failed, the others may show as `CANCELED`. That just
+  means the build stopped; it isn't a separate error.
+
 ### What happens automatically on first start
 
 The one-shot `init` service generates, into the `secrets` Docker volume:

@@ -1,7 +1,19 @@
-FROM node:22-alpine AS build
+# syntax=docker/dockerfile:1
+# Debian-based Node (glibc), matching the platform the lockfile is generated on;
+# Vite's bundler ships platform-specific native binaries.
+FROM node:22-bookworm-slim AS build
 WORKDIR /src
+# Retry flaky downloads instead of failing (npm can otherwise die with
+# "Exit handler never called!" on a dropped connection). The cache mount keeps
+# already-downloaded packages between attempts.
+ENV npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000 \
+    npm_config_fetch_timeout=600000 \
+    npm_config_update_notifier=false
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund --loglevel=http
 COPY . .
 RUN npm run build
 
