@@ -27,6 +27,11 @@ elevators. See README.md for install, services and deployment notes.
   Test connection, or when a saved port stops answering
   (`sitedb.open_connection`). Failure diagnosis lists the server's instances
   and detects addresses inside Docker's own network.
+- Two drivers, chosen per site by `auth_method`: SQL Server logins use
+  Microsoft ODBC Driver 18 (`sitedb._connect_odbc`); Windows (domain) accounts
+  use python-tds with NTLM via pyspnego (`sitedb._connect_windows`), because
+  ODBC on Linux only does Kerberos. Both go through `sitedb.connect`, which
+  applies the same session settings and timeouts.
 - Code: `backend/graintime/{common,api,collector}`, `backend/migrations`,
   `web/src`. The setup wizard and the admin panel share `SiteForm`,
   `DiscoveryPanel` and `DefaultsForm`, so the first site is registered through

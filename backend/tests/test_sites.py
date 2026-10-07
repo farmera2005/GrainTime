@@ -112,3 +112,38 @@ def test_instance_name_saved_and_test_without_port(admin_client):
     with get_sessionmaker()() as db:
         params = db.get(CollectorJob, r.json()["id"]).params["connection"]
     assert params["port"] is None and params["instance_name"] == "SQLEXPRESS"
+
+
+def test_windows_auth_site(admin_client):
+    r = admin_client.post("/api/admin/sites", json={**SITE, "auth_method": "windows", "domain": " MERCER ",
+                                                    "username": "svc_graintime"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["auth_method"] == "windows" and body["domain"] == "MERCER" and "password" not in body
+    sid = body["id"]
+    # switching to a SQL login keeps working; switching back without a domain is refused
+    assert admin_client.patch(f"/api/admin/sites/{sid}", json={"auth_method": "sql", "domain": ""}).status_code == 200
+    r = admin_client.patch(f"/api/admin/sites/{sid}", json={"auth_method": "windows"})
+    assert r.status_code == 422 and "domain" in r.text
+    assert admin_client.patch(f"/api/admin/sites/{sid}", json={
+        "auth_method": "windows", "username": "MERCER\\svc_graintime"}).status_code == 200
+    assert admin_client.patch(f"/api/admin/sites/{sid}", json={"encrypt": "strict"}).status_code == 422
+
+
+def test_windows_auth_validation_on_create(admin_client):
+    r = admin_client.post("/api/admin/sites", json={**SITE, "auth_method": "windows"})
+    assert r.status_code == 422 and "domain" in r.text
+    r = admin_client.post("/api/admin/sites", json={**SITE, "auth_method": "windows",
+                                                    "username": "svc@mercer.local"})
+    assert r.status_code == 201
+
+
+def test_windows_auth_test_connection_params(admin_client):
+    conn = {k: SITE[k] for k in ("host", "port", "database", "password")}
+    r = admin_client.post("/api/admin/jobs/test-connection", json={"connection": {
+        **conn, "username": "svc", "auth_method": "windows", "domain": "MERCER"}})
+    assert r.status_code == 202
+    with get_sessionmaker()() as db:
+        params = db.get(CollectorJob, r.json()["id"]).params["connection"]
+    assert params["auth_method"] == "windows" and params["domain"] == "MERCER"
+    assert SITE["password"] not in str(params)

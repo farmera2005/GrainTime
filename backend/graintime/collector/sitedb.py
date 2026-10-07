@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
@@ -31,10 +32,13 @@ class ConnectionSpec:
     encrypt: str = "yes"
     trust_server_certificate: bool = False
     instance_name: str | None = None
+    auth_method: str = "sql"      # "sql" (SQL Server login) or "windows" (domain account, NTLM)
+    domain: str | None = None     # Windows domain, e.g. MERCER (windows auth only)
 
     def __repr__(self) -> str:  # keep the password out of any accidental repr/log
         return (f"ConnectionSpec(host={self.host!r}, port={self.port}, "
                 f"instance_name={self.instance_name!r}, database={self.database!r}, "
+                f"auth_method={self.auth_method!r}, domain={self.domain!r}, "
                 f"username={self.username!r}, encrypt={self.encrypt!r}, "
                 f"trust_server_certificate={self.trust_server_certificate})")
 
@@ -134,7 +138,7 @@ _DRIVER_RULES = [
      "Login failed",
      "Check the login name and password, that the login is enabled, and that mixed mode "
      "authentication is on. The SQL Server error log at the site shows the exact reason."),
-    ("host_unreachable", ("login timeout expired", "timeout", "server is not found",
+    ("host_unreachable", ("login timeout expired", "timeout", "timed out", "server is not found",
                           "no route to host", "network is unreachable"),
      "The server did not complete the login in time",
      "The port is open but SQL Server did not answer in 5 s. Check the port is SQL Server's "
@@ -416,20 +420,118 @@ def open_connection(spec: ConnectionSpec) -> tuple[object, dict]:
 
 def connect(spec: ConnectionSpec):
     """Open one read-only connection, or raise SiteConnectionError."""
+    tcp_probe(spec.host, spec.port)
+    if spec.auth_method == "windows":
+        conn = _connect_windows(spec)
+    else:
+        conn = _connect_odbc(spec)
+    cur = conn.cursor()
+    cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; "
+                "SET LOCK_TIMEOUT 5000; SET DEADLOCK_PRIORITY LOW;")
+    cur.close()
+    return conn
+
+
+def _connect_odbc(spec: ConnectionSpec):
+    """SQL Server logins: Microsoft ODBC Driver 18."""
     import pyodbc
 
-    tcp_probe(spec.host, spec.port)
     try:
         conn = pyodbc.connect(_connection_string(spec), timeout=CONNECT_TIMEOUT_S,
                               autocommit=True, readonly=True)
     except pyodbc.Error as exc:
         raise classify_driver_error(exc) from None
     conn.timeout = COMMAND_TIMEOUT_S
-    cur = conn.cursor()
-    cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; "
-                "SET LOCK_TIMEOUT 5000; SET DEADLOCK_PRIORITY LOW;")
-    cur.close()
     return conn
+
+
+# --- Windows (domain) accounts ------------------------------------------------ #
+# ODBC Driver 18 on Linux can only sign in with Windows accounts through Kerberos,
+# which needs a registered SPN, a server *name* (not an IP), domain DNS and synced
+# clocks. Windows PCs fall back to NTLM when Kerberos is unavailable, so for
+# Windows accounts we use python-tds with NTLM (pyspnego), which works by IP and
+# needs nothing configured on this server.
+
+SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+_TLS_PATCH_LOCK = threading.Lock()
+
+
+def windows_principal(spec: ConnectionSpec) -> str:
+    """DOMAIN\\user, or user@domain.tld when given as a UPN."""
+    user = spec.username.strip()
+    if "\\" in user or "@" in user or not spec.domain:
+        return user
+    return f"{spec.domain.strip()}\\{user}"
+
+
+def _connect_windows(spec: ConnectionSpec):
+    import pytds.login
+
+    if spec.encrypt == "strict":
+        raise SiteConnectionError(
+            "encrypt_unsupported", "Strict (TDS 8) encryption isn't available with Windows sign-in",
+            "Choose 'Encrypt (recommended)' for this site.")
+    auth = pytds.login.SpnegoAuth(username=windows_principal(spec), password=spec.password,
+                                  hostname=spec.host, service="MSSQLSvc", protocol="ntlm")
+    return _connect_pytds(spec, auth=auth)
+
+
+def _connect_pytds(spec: ConnectionSpec, **login):
+    """python-tds connection with the same rules as ODBC: timeouts, read-only intent,
+    autocommit, TLS per the site's encrypt / trust-certificate settings."""
+    import pytds
+    import pytds.tls
+    from OpenSSL import SSL
+
+    kwargs = dict(dsn=spec.host, port=spec.port, database=spec.database,
+                  login_timeout=CONNECT_TIMEOUT_S, timeout=COMMAND_TIMEOUT_S, autocommit=True,
+                  readonly=True, appname="GrainTime-Collector", disable_connect_retry=True,
+                  **login)
+    if spec.encrypt != "no":
+        kwargs["cafile"] = SYSTEM_CA_BUNDLE          # turns TLS on, verified against system CAs
+        kwargs["validate_host"] = not spec.trust_server_certificate
+    try:
+        if spec.encrypt != "no" and spec.trust_server_certificate:
+            # Self-signed server certificate: python-tds always verifies, so hand it a
+            # non-verifying TLS 1.2 context for this one login (same meaning as
+            # TrustServerCertificate=yes in ODBC).
+            def _trusting_context(_cafile):
+                ctx = SSL.Context(SSL.TLSv1_2_METHOD)
+                ctx.set_verify(SSL.VERIFY_NONE, lambda *a: True)
+                return ctx
+            with _TLS_PATCH_LOCK:
+                original = pytds.tls.create_context
+                pytds.tls.create_context = _trusting_context
+                try:
+                    return pytds.connect(**kwargs)
+                finally:
+                    pytds.tls.create_context = original
+        return pytds.connect(**kwargs)
+    except SiteConnectionError:
+        raise
+    except Exception as exc:  # pytds, OpenSSL and pyspnego raise various types
+        raise classify_windows_error(exc) from None
+
+
+def classify_windows_error(exc: Exception) -> SiteConnectionError:
+    low = str(exc).lower()
+    if "untrusted domain" in low or "18452" in low or "login failed" in low or "18456" in low:
+        return SiteConnectionError(
+            "windows_login_failed", "SQL Server rejected the Windows sign-in",
+            "Check the domain, user name and password. The account needs a SQL Server login "
+            "(CREATE LOGIN [DOMAIN\\user] FROM WINDOWS) with read access to the database. "
+            "GrainTime signs in with NTLM, the method Windows PCs fall back to; if your domain "
+            "has turned NTLM off, use a SQL Server login for GrainTime instead.", str(exc)[:500])
+    if "spnego" in low or "ntlm" in low:
+        return SiteConnectionError(
+            "windows_login_failed", "The Windows sign-in could not be completed",
+            "Check the domain and user name (DOMAIN\\user or user@domain), and the password.",
+            str(exc)[:500])
+    err = classify_driver_error(exc)
+    if err.code == "mixed_mode_disabled":  # not relevant to Windows sign-in
+        err = SiteConnectionError("windows_login_failed", "SQL Server rejected the Windows sign-in",
+                                  "Check the domain, user name and password.", err.detail)
+    return err
 
 
 def tls_assessment(product_version: str) -> dict:

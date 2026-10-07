@@ -114,6 +114,7 @@ a time.
 | Alembic | Standard migrations for SQLAlchemy |
 | pyodbc + Microsoft ODBC Driver 18 | Required driver; generic SQL Server access with no edition-specific features |
 | cryptography (Fernet) | Authenticated encryption for site passwords at rest |
+| python-tds + pyspnego + pyOpenSSL | Windows (domain) account sign-in over NTLM, which ODBC Driver 18 on Linux lacks; used only for sites set to Windows accounts |
 | argon2-cffi | Current recommended password hashing for local accounts |
 | React + TypeScript + Vite, React Router | Required stack; Vite for fast builds, no other UI dependencies |
 | nginx (unprivileged image) | Serves the built frontend and proxies the api |
@@ -227,10 +228,40 @@ name to DNS.
 <a id="deployment-notes-connecting-to-site-sql-servers-mixed-mode-disabled"></a>
 ### SQL authentication (mixed mode) disabled
 
-Windows authentication from a Linux container isn't practical, so GrainTime
-uses a SQL login. If the other systems sign in with a Windows/domain account
-(`DOMAIN\user`), create a SQL login for GrainTime instead. In SSMS: Server Properties → Security → *SQL Server and
-Windows Authentication mode*, then restart the service.
+A SQL Server login only works when mixed mode is on. In SSMS: Server
+Properties → Security → *SQL Server and Windows Authentication mode*, then
+restart the service. Or skip SQL logins entirely: set the site to **Sign in
+with: Windows account (domain)** (see below).
+
+<a id="deployment-notes-connecting-to-site-sql-servers-windows-login-failed"></a>
+### Windows (domain) accounts
+
+A site can sign in with a domain account instead of a SQL Server login. In the
+site form choose **Sign in with → Windows account (domain)**, then enter the
+domain and user name (or type `DOMAIN\user`) and the password. The password is
+stored encrypted and is never shown again, like SQL login passwords.
+
+How it works: Microsoft's ODBC driver on Linux can only use Windows accounts
+through Kerberos, which needs a registered SPN, a server name rather than an
+IP, domain DNS and synced clocks. Windows PCs fall back to **NTLM** when
+Kerberos isn't available, so GrainTime does the same. Windows-account sites
+connect with the open-source `python-tds` driver and NTLM (`pyspnego`). This
+works by IP address and needs nothing set up on the GrainTime server.
+Encryption and *Trust the server certificate* behave as for SQL logins.
+*Strict (TDS 8)* encryption isn't available with this driver.
+
+If SQL Server rejects the sign-in:
+
+- The account needs a login and read access on the scale database:
+  `CREATE LOGIN [DOMAIN\user] FROM WINDOWS;` then a database user in
+  `db_datareader` (see `docs/sql/discovery_login.sql`).
+- Check the domain, user name and password. A locked or expired domain account
+  fails here too.
+- Some domains turn NTLM off by policy. Use a SQL Server login for GrainTime
+  there.
+
+Windows sign-in doesn't get past a firewall: if Test connection reports that
+the SQL port doesn't answer, fix that first.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-login-failed"></a>
 ### Login failed

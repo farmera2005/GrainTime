@@ -64,6 +64,19 @@ def validate_url(v: str | None) -> str | None:
     return v or None
 
 
+def check_auth(method: str | None, domain: str | None, username: str | None,
+               encrypt: str | None) -> None:
+    if method != "windows":
+        return
+    user = (username or "").strip()
+    if not (domain or "").strip() and "\\" not in user and "@" not in user:
+        raise ValueError("For a Windows account, enter the domain (or the user as DOMAIN\\user "
+                         "or user@domain).")
+    if encrypt == "strict":
+        raise ValueError("Strict (TDS 8) encryption isn't available with Windows sign-in; "
+                         "choose Encrypt.")
+
+
 # --- setup / auth ---------------------------------------------------------- #
 
 class AdminCreate(BaseModel):
@@ -123,6 +136,8 @@ class ConnectionFields(BaseModel):
     instance_name: str | None = Field(default=None, max_length=128)
     database: str = Field(min_length=1, max_length=128)
     username: str = Field(min_length=1, max_length=128)
+    auth_method: Literal["sql", "windows"] = "sql"
+    domain: str | None = Field(default=None, max_length=100)
     # Write-only. Optional when testing a saved site (the stored one is used).
     password: str | None = Field(default=None, max_length=256)
     encrypt: Literal["yes", "no", "strict"] = "yes"
@@ -143,6 +158,8 @@ class ConnectionFields(BaseModel):
         if self.port is None and not self.instance_name:
             raise ValueError("Enter the TCP port, or the instance name so the port can be "
                              "looked up.")
+        check_auth(self.auth_method, self.domain, self.username, self.encrypt)
+        self.domain = (self.domain or "").strip() or None
         return self
 
     def __repr__(self) -> str:
@@ -178,6 +195,8 @@ class SiteUpdate(BaseModel):
     instance_name: str | None = Field(default=None, max_length=128)  # "" clears it
     database: str | None = Field(default=None, min_length=1, max_length=128)
     username: str | None = Field(default=None, min_length=1, max_length=128)
+    auth_method: Literal["sql", "windows"] | None = None
+    domain: str | None = Field(default=None, max_length=100)  # "" clears it
     password: str | None = Field(default=None, max_length=256)  # blank/None = keep
     encrypt: Literal["yes", "no", "strict"] | None = None
     trust_server_certificate: bool | None = None
@@ -216,6 +235,8 @@ class SiteOut(BaseModel):
     port: int
     instance_name: str | None
     database: str
+    auth_method: str
+    domain: str | None
     username: str
     has_password: bool
     encrypt: str

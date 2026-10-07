@@ -31,11 +31,14 @@ export type Defaults = {
 };
 
 export type Encrypt = "yes" | "no" | "strict";
+export type AuthMethod = "sql" | "windows";
 
 export type ConnectionFields = {
   host: string;
   port: number | null;
   instance_name?: string | null;
+  auth_method?: AuthMethod;
+  domain?: string | null;
   database: string;
   username: string;
   password?: string;
@@ -53,6 +56,8 @@ export type Site = {
   port: number;
   instance_name: string | null;
   database: string;
+  auth_method: AuthMethod;
+  domain: string | null;
   username: string;
   has_password: boolean;
   encrypt: Encrypt;

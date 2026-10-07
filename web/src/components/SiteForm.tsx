@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { api, ApiError, ConnectionFields, Encrypt, Site, SiteInput } from "../api";
+import { api, ApiError, AuthMethod, ConnectionFields, Encrypt, Site, SiteInput } from "../api";
 import { useJob } from "../useJob";
 import { Field, Notice } from "./Field";
 import { TestConnectionOutcome } from "./JobOutcome";
@@ -14,6 +14,8 @@ type FormState = {
   instance_name: string;
   database: string;
   username: string;
+  auth_method: AuthMethod;
+  domain: string;
   password: string;
   encrypt: Encrypt;
   trust_server_certificate: boolean;
@@ -30,6 +32,8 @@ function fromSite(s?: Site): FormState {
     instance_name: s?.instance_name ?? "",
     database: s?.database ?? "",
     username: s?.username ?? "",
+    auth_method: s?.auth_method ?? "sql",
+    domain: s?.domain ?? "",
     password: "",
     encrypt: s?.encrypt ?? "yes",
     // Most SQL Server Express installs use a self-signed certificate.
@@ -75,6 +79,15 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
       port: !site && value.trim() && prev.port === "1433" ? "" : prev.port,
     }));
 
+  // DOMAIN\user typed into the Windows user field fills in the domain.
+  const setWindowsUser = (value: string) => {
+    const i = value.indexOf("\\");
+    if (i < 0) return set("username", value);
+    setF((prev) => ({ ...prev, domain: value.slice(0, i), username: value.slice(i + 1) }));
+  };
+  const setAuth = (value: AuthMethod) =>
+    setF((prev) => ({ ...prev, auth_method: value, encrypt: value === "windows" && prev.encrypt === "strict" ? "yes" : prev.encrypt }));
+
   // A port looked up from the instance name is filled into the form.
   useEffect(() => {
     const p = testJob?.status === "succeeded" ? testJob.result?.resolved_port : undefined;
@@ -87,6 +100,8 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
     instance_name: f.instance_name.trim() || null,
     database: f.database.trim(),
     username: f.username.trim(),
+    auth_method: f.auth_method,
+    domain: f.auth_method === "windows" ? f.domain.trim() || null : null,
     password: f.password || undefined,
     encrypt: f.encrypt,
     trust_server_certificate: f.trust_server_certificate,
@@ -187,10 +202,33 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
           <Field label="Database name" error={errors.database}>
             <input value={f.database} onChange={(e) => set("database", e.target.value)} required />
           </Field>
-          <Field label="SQL login" error={errors.username} hint="Read-only SQL authentication login">
-            <input value={f.username} onChange={(e) => set("username", e.target.value)} autoComplete="off" required />
+          <Field
+            label="Sign in with"
+            error={errors.auth_method}
+            hint={f.auth_method === "windows" ? "Domain account, signed in with NTLM like a Windows PC" : "A SQL Server login (mixed mode)"}
+          >
+            <select value={f.auth_method} onChange={(e) => setAuth(e.target.value as AuthMethod)}>
+              <option value="sql">SQL Server login</option>
+              <option value="windows">Windows account (domain)</option>
+            </select>
           </Field>
         </div>
+        {f.auth_method === "windows" ? (
+          <div className="row">
+            <Field label="Domain" error={errors.domain} hint="e.g. MERCER (the part before \ in DOMAIN\user)">
+              <input value={f.domain} onChange={(e) => set("domain", e.target.value)} autoComplete="off" />
+            </Field>
+            <Field label="Windows user name" error={errors.username} hint="You can type DOMAIN\user here. Read-only access is enough">
+              <input value={f.username} onChange={(e) => setWindowsUser(e.target.value)} autoComplete="off" required />
+            </Field>
+          </div>
+        ) : (
+          <div className="row">
+            <Field label="SQL login" error={errors.username} hint="Read-only SQL authentication login">
+              <input value={f.username} onChange={(e) => set("username", e.target.value)} autoComplete="off" required />
+            </Field>
+          </div>
+        )}
         <Field
           label="Password"
           error={errors.password}
@@ -199,10 +237,10 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
           <input type="password" value={f.password} onChange={(e) => set("password", e.target.value)} autoComplete="new-password" />
         </Field>
         <div className="row">
-          <Field label="Encryption" error={errors.encrypt} hint="ODBC Driver 18 encrypts by default">
+          <Field label="Encryption" error={errors.encrypt} hint="Encrypted by default">
             <select value={f.encrypt} onChange={(e) => set("encrypt", e.target.value as Encrypt)}>
               <option value="yes">Encrypt (recommended)</option>
-              <option value="strict">Strict (TDS 8)</option>
+              <option value="strict" disabled={f.auth_method === "windows"}>Strict (TDS 8)</option>
               <option value="no">Do not require encryption</option>
             </select>
           </Field>

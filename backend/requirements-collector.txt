@@ -1,2 +1,6 @@
 -r requirements.txt
 pyodbc==5.3.0
+# Windows (domain) accounts: NTLM sign-in, which ODBC Driver 18 on Linux lacks.
+python-tds==1.17.1
+pyspnego==0.12.4
+pyOpenSSL==26.4.0

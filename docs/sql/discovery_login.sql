@@ -49,6 +49,19 @@ GO
 */
 
 /* ---------------------------------------------------------------------------
+   ALTERNATIVE: use a Windows (domain) account instead of a SQL login.
+   In GrainTime choose "Sign in with: Windows account (domain)". Mixed mode is
+   then not needed. Replace MERCER\svc_graintime with the real account.
+
+   USE [master];
+   CREATE LOGIN [MERCER\svc_graintime] FROM WINDOWS WITH DEFAULT_DATABASE = [CompuWeighDB];
+   USE [CompuWeighDB];
+   CREATE USER [MERCER\svc_graintime] FOR LOGIN [MERCER\svc_graintime];
+   ALTER ROLE [db_datareader] ADD MEMBER [MERCER\svc_graintime];
+   GRANT VIEW DEFINITION TO [MERCER\svc_graintime];
+--------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
    CLEAN UP after discovery (run when the mapping has been confirmed):
 
    USE [CompuWeighDB];

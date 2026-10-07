@@ -55,18 +55,21 @@ def spec_for_job(db, job: CollectorJob) -> tuple[sitedb.ConnectionSpec, str]:
         spec = sitedb.ConnectionSpec(
             host=conn["host"], port=int(conn["port"]) if conn.get("port") else None,
             instance_name=conn.get("instance_name") or None, database=conn["database"],
+            auth_method=conn.get("auth_method") or "sql", domain=conn.get("domain") or None,
             username=conn["username"], password=password, encrypt=conn.get("encrypt", "yes"),
             trust_server_certificate=bool(conn.get("trust_server_certificate")))
     elif site is not None:
         spec = sitedb.ConnectionSpec(
             host=site.host, port=site.port, instance_name=site.instance_name,
+            auth_method=site.auth_method, domain=site.domain,
             database=site.database_name, username=site.username,
             password=crypto.decrypt(site.password_encrypted), encrypt=site.encrypt,
             trust_server_certificate=site.trust_server_certificate)
     else:
         raise ValueError("job has neither a site nor connection details")
     where = spec.host + (f"\\{spec.instance_name}" if spec.instance_name else "")
-    return spec, f"{where}:{spec.port or '?'} / {spec.database} as {spec.username}"
+    who = sitedb.windows_principal(spec) if spec.auth_method == "windows" else spec.username
+    return spec, f"{where}:{spec.port or '?'} / {spec.database} as {who}"
 
 
 class JobRunner:

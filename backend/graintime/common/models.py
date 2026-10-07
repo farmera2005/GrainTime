@@ -61,6 +61,9 @@ class Site(Base):
     # SQL Server Browser when testing, or when the saved port stops answering.
     instance_name: Mapped[str | None] = mapped_column(String(128))
     database_name: Mapped[str] = mapped_column(String(128))
+    # "sql": SQL Server login. "windows": domain account, signed in with NTLM.
+    auth_method: Mapped[str] = mapped_column(String(10), default="sql", server_default="sql")
+    domain: Mapped[str | None] = mapped_column(String(100))
     username: Mapped[str] = mapped_column(String(128))
     # Fernet ciphertext. Write-only: never returned by the API, never logged.
     password_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
@@ -77,6 +80,7 @@ class Site(Base):
     __table_args__ = (
         CheckConstraint("port BETWEEN 1 AND 65535", name="ck_sites_port"),
         CheckConstraint("encrypt IN ('yes','no','strict')", name="ck_sites_encrypt"),
+        CheckConstraint("auth_method IN ('sql','windows')", name="ck_sites_auth_method"),
     )
 
 

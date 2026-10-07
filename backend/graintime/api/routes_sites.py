@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..common import audit, crypto
 from ..common.models import CollectorJob, Site, User
+from .schemas import check_auth
 from .schemas import DiscoveryIn, SiteCreate, SiteDelete, SiteOut, SiteUpdate, TestConnectionIn
 from .security import get_db, require_admin
 
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
 
 # Fields shown in the audit log (the password is recorded only as "(changed)").
 AUDIT_FIELDS = ("name", "code", "address", "map_url", "host", "port", "instance_name",
-                "database_name", "username",
+                "database_name", "auth_method", "domain", "username",
                 "encrypt", "trust_server_certificate", "polling_enabled", "show_on_dashboard",
                 "show_on_public")
 
@@ -33,7 +34,8 @@ AUDIT_FIELDS = ("name", "code", "address", "map_url", "host", "port", "instance_
 def site_out(s: Site) -> SiteOut:
     return SiteOut(id=s.id, name=s.name, code=s.code, address=s.address, map_url=s.map_url,
                    host=s.host, port=s.port, instance_name=s.instance_name,
-                   database=s.database_name, username=s.username,
+                   database=s.database_name, auth_method=s.auth_method, domain=s.domain,
+                   username=s.username,
                    has_password=bool(s.password_encrypted), encrypt=s.encrypt,
                    trust_server_certificate=s.trust_server_certificate,
                    polling_enabled=s.polling_enabled, show_on_dashboard=s.show_on_dashboard,
@@ -70,7 +72,8 @@ def create_site(body: SiteCreate, db: DbSession = Depends(get_db),
         raise HTTPException(409, f"Short code {body.code} is already used by another site.")
     site = Site(name=body.name.strip(), code=body.code, address=body.address,
                 map_url=body.map_url, host=body.host, port=body.port,
-                instance_name=body.instance_name,
+                instance_name=body.instance_name, auth_method=body.auth_method,
+                domain=body.domain,
                 database_name=body.database, username=body.username,
                 password_encrypted=crypto.encrypt(body.password), encrypt=body.encrypt,
                 trust_server_certificate=body.trust_server_certificate,
@@ -111,11 +114,18 @@ def update_site(site_id: int, body: SiteUpdate, db: DbSession = Depends(get_db),
     if site.archived_at is not None and (data.get("show_on_dashboard") or data.get("show_on_public")):
         raise HTTPException(409, "Restore this site before showing it on the dashboard or "
                                  "public page.")
-    for k in ("address", "map_url"):
+    for k in ("address", "map_url", "domain"):
         if k in data and isinstance(data[k], str):
             data[k] = data[k].strip() or None
+    try:
+        check_auth(data.get("auth_method", site.auth_method),
+                   data["domain"] if "domain" in data else site.domain,
+                   data.get("username") or site.username, data.get("encrypt") or site.encrypt)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     for k, v in data.items():
         if v is None and k in ("name", "code", "host", "port", "database_name", "username",
+                               "auth_method",
                                "encrypt", "trust_server_certificate", "polling_enabled",
                                "show_on_dashboard", "show_on_public"):
             continue  # required fields cannot be cleared
@@ -207,6 +217,7 @@ def queue_test_connection(body: TestConnectionIn, db: DbSession = Depends(get_db
         c = body.connection
         params["connection"] = {
             "host": c.host, "port": c.port, "instance_name": c.instance_name,
+            "auth_method": c.auth_method, "domain": c.domain,
             "database": c.database, "username": c.username,
             "encrypt": c.encrypt, "trust_server_certificate": c.trust_server_certificate,
             # Ciphertext only, wiped by the collector when the job ends.
