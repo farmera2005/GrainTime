@@ -174,11 +174,37 @@ The server's SQL Server Browser doesn't list that instance. The error shows the
 instances it does have; correct the name or use one of their ports.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-host-unreachable"></a>
-### Host unreachable
+### No answer from the SQL port
 
-Nothing answered at all. Check the address and the network route from the
-Docker host to the site. If you know there's no firewall, also check the two
-notes below.
+When the SQL port doesn't answer, Test connection also checks whether the
+machine answers on a few standard Windows ports (file sharing, RPC, Remote
+Desktop and so on). These are one-time connect-only checks, run only when you
+click Test. The result is shown as a checklist under the error and points to
+one of the two sections below.
+
+<a id="deployment-notes-connecting-to-site-sql-servers-sql-port-blocked"></a>
+### Server reachable, but the SQL port doesn't answer
+
+The machine is on the network, but nothing answers on the SQL port. Usually:
+
+1. **Windows Firewall on the SQL Server PC itself.** It's on by default even
+   where the network has no firewall. Programs on that same PC (CompuWeigh,
+   SSMS run locally) are never blocked, so "other systems connect" can still
+   be true. Add an inbound rule for TCP on the SQL port (and UDP 1434 if you
+   use the instance name), from the Docker host's address.
+2. **SQL Server isn't on that port.** Named instances normally use a dynamic
+   port. Enter the instance name and leave the port blank, or read the port in
+   SQL Server Configuration Manager → TCP/IP → IP Addresses → IPAll. Check
+   TCP/IP is enabled there too.
+
+<a id="deployment-notes-connecting-to-site-sql-servers-no-route"></a>
+### Nothing at that address answers
+
+The machine didn't respond on any port. Check that the address is the SQL
+Server PC's own IP (`ipconfig` on that PC), and that the Docker host can reach
+that site's network. Other PCs connecting only shows the site is up, not that
+this server has a route to it, so ask IT about VLAN or VPN routing. Windows
+Firewall on a "Public" network profile can also drop everything.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-docker-network-overlap"></a>
 ### Address inside Docker's internal network

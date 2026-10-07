@@ -82,6 +82,7 @@ export type JobError = {
   docs?: string;
   detail?: string;
   instances?: SqlInstance[];
+  checks?: { check: string; result: string; ok: boolean }[];
 };
 
 export type Job = {

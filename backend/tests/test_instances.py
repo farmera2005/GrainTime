@@ -64,8 +64,10 @@ def spec(**over):
 def fake(monkeypatch):
     state = {"instances": [{"instance": "SQLEXPRESS", "tcp_port": 49721, "server": "S", "version": "v"}],
              "listening": {49721}, "connects": []}
+    state["probe"] = {}  # port -> result; default "no answer"
     monkeypatch.setattr(sitedb, "browse_instances", lambda host, **k: state["instances"])
     monkeypatch.setattr(sitedb, "_local_networks", lambda: [])
+    monkeypatch.setattr(sitedb, "probe_tcp", lambda host, port, **k: state["probe"].get(port, "no answer"))
 
     def connect(sp):
         state["connects"].append(sp.port)
@@ -125,7 +127,7 @@ def test_wrong_port_without_instance_lists_what_the_server_has(fake, monkeypatch
 
 
 def test_docker_network_overlap(fake, monkeypatch):
-    fake["instances"] = None  # nothing at that address answers at all
+    fake["instances"] = None  # nothing at that address answers at all (probes default to silence)
     monkeypatch.setattr(sitedb, "_local_networks", lambda: [ipaddress.IPv4Network("172.18.0.0/16")])
     monkeypatch.setattr(sitedb, "connect", lambda sp: (_ for _ in ()).throw(
         SiteConnectionError("host_unreachable", "x", "y")))
@@ -177,3 +179,45 @@ def test_no_overlap_reported_when_something_answers(fake, monkeypatch):
     with pytest.raises(SiteConnectionError) as e:
         sitedb.open_connection(spec(host="172.18.5.10", instance_name=None, port=1500))
     assert e.value.code == "port_closed"
+
+
+def _unreachable(monkeypatch):
+    def connect(sp):
+        raise SiteConnectionError("host_unreachable", "Host unreachable or port filtered", "firewall")
+    monkeypatch.setattr(sitedb, "connect", connect)
+
+
+def test_machine_answers_but_sql_port_silent(fake, monkeypatch):
+    """The reported case: no answer on the SQL port, but the PC is there."""
+    fake["instances"] = None
+    fake["probe"] = {445: "open", 135: "refused"}
+    _unreachable(monkeypatch)
+    with pytest.raises(SiteConnectionError) as e:
+        sitedb.open_connection(spec(host="10.5.1.20", instance_name=None, port=1433))
+    err = e.value.as_dict()
+    assert err["code"] == "sql_port_blocked"
+    assert "reachable" in err["cause"] and "TCP port 1433" in err["cause"]
+    assert "Windows Firewall on the SQL Server machine" in err["fix"]
+    labels = {c["check"]: c for c in err["checks"]}
+    assert labels["Windows file sharing (TCP 445)"]["ok"] is True
+    assert labels["SQL Server (TCP 1433)"]["ok"] is False
+    assert err["docs"].endswith("sql-port-blocked")
+
+
+def test_nothing_answers_at_all(fake, monkeypatch):
+    fake["instances"] = None
+    _unreachable(monkeypatch)
+    with pytest.raises(SiteConnectionError) as e:
+        sitedb.open_connection(spec(host="10.5.1.20", instance_name=None, port=1433))
+    err = e.value.as_dict()
+    assert err["code"] == "no_route" and "any port" in err["cause"]
+    assert all(not c["ok"] for c in err["checks"] if c["check"].startswith(("SQL", "Windows", "Remote", "Web")))
+    assert "Docker uses" not in err["fix"]
+
+
+def test_nothing_answers_in_docker_default_range_hints(fake, monkeypatch):
+    fake["instances"] = None
+    _unreachable(monkeypatch)
+    with pytest.raises(SiteConnectionError) as e:
+        sitedb.open_connection(spec(host="172.20.4.9", instance_name=None, port=1433))
+    assert e.value.code == "no_route" and "Docker uses" in e.value.fix

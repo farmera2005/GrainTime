@@ -61,6 +61,22 @@ export function JobErrorNotice({ error, onUsePort }: { error: NonNullable<Job["e
           </ul>
         </div>
       ) : null}
+      {error.checks?.length ? (
+        <div className="checks">
+          <div className="small">What the GrainTime server checked:</div>
+          <table>
+            <tbody>
+              {error.checks.map((c) => (
+                <tr key={c.check}>
+                  <td aria-hidden="true" className={c.ok ? "check-ok" : "check-bad"}>{c.ok ? "✓" : "✗"}</td>
+                  <td>{c.check}</td>
+                  <td>{c.result}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
       {error.docs ? <div className="muted small">Deployment notes: {error.docs}</div> : null}
       {error.detail ? (
         <details className="small">

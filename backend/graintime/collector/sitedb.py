@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 CONNECT_TIMEOUT_S = 5
@@ -42,16 +43,19 @@ class SiteConnectionError(Exception):
     """A classified connection failure: code, plain-language cause, and the fix."""
 
     def __init__(self, code: str, cause: str, fix: str, detail: str = "",
-                 instances: list[dict] | None = None):
+                 instances: list[dict] | None = None, checks: list[dict] | None = None):
         super().__init__(cause)
         self.code, self.cause, self.fix, self.detail = code, cause, fix, detail
         self.instances = instances  # SQL Server instances the host reported, if asked
+        self.checks = checks        # network checks run while diagnosing
 
     def as_dict(self) -> dict:
         d = {"code": self.code, "cause": self.cause, "fix": self.fix,
              "docs": f"{DOCS}-{self.code.replace('_', '-')}", "detail": self.detail}
         if self.instances is not None:
             d["instances"] = self.instances
+        if self.checks is not None:
+            d["checks"] = self.checks
         return d
 
 
@@ -247,38 +251,131 @@ def _docker_overlap(host: str) -> tuple[str, str] | None:
     return None
 
 
+# Standard Windows services, used only to tell "machine reachable, SQL port
+# blocked" apart from "machine not reachable at all". Connect-only, once per
+# diagnosis, never sends data.
+REACHABILITY_PORTS = [(445, "Windows file sharing (TCP 445)"), (135, "Windows RPC (TCP 135)"),
+                      (3389, "Remote Desktop (TCP 3389)"), (5985, "Windows Remote Management (TCP 5985)"),
+                      (80, "Web server (TCP 80)")]
+PROBE_TIMEOUT_S = 2
+DOCKER_DEFAULT_POOLS = [ipaddress.ip_network("172.16.0.0/12"), ipaddress.ip_network("192.168.0.0/16")]
+
+
+def probe_tcp(host: str, port: int, timeout: float = PROBE_TIMEOUT_S) -> str:
+    """'open', 'refused' (the machine answered), 'no answer', or 'unreachable'."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return "open"
+    except ConnectionRefusedError:
+        return "refused"
+    except (socket.timeout, TimeoutError):
+        return "no answer"
+    except OSError as exc:
+        return f"unreachable ({exc.strerror or exc})"
+
+
+def _resolve_ipv4(host: str) -> str | None:
+    try:
+        return socket.getaddrinfo(host, None, family=socket.AF_INET)[0][4][0]
+    except socket.gaierror:
+        return None
+
+
+def _source_address(ip: str) -> str | None:
+    """The address this container uses to reach ip (no packet is sent)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((ip, 9))
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def _network_checks(host: str, port: int | None, ip: str | None) -> tuple[list[dict], bool]:
+    """Run the reachability checks. Returns (checks, machine_answered)."""
+    checks = [{"check": "Address", "result": f"{host} → {ip}" if ip and ip != host else (ip or host),
+               "ok": ip is not None}]
+    if ip:
+        checks.append({"check": "GrainTime collector's address", "result": _source_address(ip) or "?",
+                       "ok": True})
+    checks.append({"check": f"SQL Server (TCP {port})", "result": "no answer", "ok": False})
+    checks.append({"check": "SQL Server Browser (UDP 1434)", "result": "no answer", "ok": False})
+    with ThreadPoolExecutor(max_workers=len(REACHABILITY_PORTS)) as pool:
+        results = list(pool.map(lambda p: probe_tcp(host, p[0]), REACHABILITY_PORTS))
+    answered = False
+    for (_, label), r in zip(REACHABILITY_PORTS, results):
+        ok = r in ("open", "refused")
+        answered |= ok
+        checks.append({"check": label, "ok": ok,
+                       "result": {"open": "answered (open)",
+                                  "refused": "answered (closed, but the machine replied)"}.get(r, r)})
+    return checks, answered
+
+
 def diagnose(spec: ConnectionSpec, exc: SiteConnectionError) -> SiteConnectionError:
-    """Add what we can learn when the SQL port does not answer: whether the
-    address collides with Docker's own network, and which instances (and
-    ports) the host's SQL Server Browser reports."""
+    """Add what we can learn when the SQL port does not answer: which instances
+    (and ports) the host's SQL Server Browser reports, whether the address
+    collides with Docker's own network, and whether the machine answers at all."""
     if exc.code not in ("port_closed", "host_unreachable"):
         return exc
     instances = exc.instances if exc.instances is not None else browse_instances(spec.host)
-    if not instances:
-        # Only silence looks like an overlap: if the port was refused or SQL Server
-        # Browser answered, a machine is really there (e.g. a dev site on Docker's
-        # own network).
-        overlap = _docker_overlap(spec.host) if exc.code == "host_unreachable" else None
-        if overlap:
-            ip, net = overlap
-            return SiteConnectionError(
-                "docker_network_overlap",
-                f"The site's address {ip} is inside Docker's internal network {net}",
-                "Docker on this server uses the same address range as the site, so the "
-                "connection never leaves the server. Ask IT to move Docker's address pools to "
-                "a range the company network does not use (see the deployment notes).")
-        return exc
-    port = spec.port
-    listed = _instance_list(instances)
-    if exc.code == "host_unreachable":
-        cause = f"The server is reachable, but nothing answered on TCP port {port}"
-    else:
-        cause = f"Nothing is listening on TCP port {port}"
+    if instances:
+        port = spec.port
+        listed = _instance_list(instances)
+        if exc.code == "host_unreachable":
+            cause = f"The server is reachable, but nothing answered on TCP port {port}"
+        else:
+            cause = f"Nothing is listening on TCP port {port}"
+        return SiteConnectionError(
+            exc.code, cause,
+            f"SQL Server Browser on this server reports: {listed}. Use one of those ports, or "
+            "enter the instance name and leave the port blank so it is looked up.",
+            exc.detail, instances=instances)
+    if exc.code != "host_unreachable":
+        return exc  # refused: the machine answered; the message already says why
+
+    ip = _resolve_ipv4(spec.host)
+    checks, answered = _network_checks(spec.host, spec.port, ip)
+    # Only silence looks like an overlap: if anything answered, a machine is really
+    # there (e.g. a dev site on Docker's own network).
+    overlap = None if answered else _docker_overlap(spec.host)
+    if overlap:
+        oip, net = overlap
+        return SiteConnectionError(
+            "docker_network_overlap",
+            f"The site's address {oip} is inside Docker's internal network {net}",
+            "Docker on this server uses the same address range as the site, so the connection "
+            "never leaves the server. Ask IT to move Docker's address pools to a range the "
+            "company network does not use (see the deployment notes).", checks=checks)
+    where = ip or spec.host
+    if answered:
+        return SiteConnectionError(
+            "sql_port_blocked",
+            f"The server {where} is reachable, but SQL Server did not answer on TCP port "
+            f"{spec.port}",
+            "Usually one of two things. (1) Windows Firewall on the SQL Server machine itself is "
+            "blocking the port. It is on by default even where the network has no firewall, and "
+            "programs running on that same PC (such as CompuWeigh) are never blocked, so they "
+            f"still connect. Add an inbound rule there allowing TCP {spec.port} (and UDP 1434 to "
+            "look up instance names). (2) SQL Server is not on that port: a named instance "
+            "(SERVER\\SQLEXPRESS) normally uses a different, dynamic port. Enter the instance "
+            "name and leave the port blank, or read the port in SQL Server Configuration Manager "
+            "> Protocols > TCP/IP > IP Addresses > IPAll. Also check TCP/IP is enabled there.",
+            exc.detail, checks=checks)
+    hint = ""
+    if ip and any(ipaddress.ip_address(ip) in n for n in DOCKER_DEFAULT_POOLS):
+        hint = (f" {ip} is also in an address range Docker uses for its own networks by "
+                "default; if another Docker network on this server uses it, traffic never leaves "
+                "the server (see the deployment notes).")
     return SiteConnectionError(
-        exc.code, cause,
-        f"SQL Server Browser on this server reports: {listed}. Use one of those ports, or "
-        "enter the instance name and leave the port blank so it is looked up.",
-        exc.detail, instances=instances)
+        "no_route",
+        f"Nothing at {where} answered the GrainTime server on any port",
+        "The machine did not respond on the SQL port or on any standard Windows port. Check: "
+        "the address is the SQL Server PC's own IP (run ipconfig on that PC); the GrainTime "
+        "server is on a network that can reach the site (other PCs connecting proves the site "
+        "is up, not that this server has a route to it, so ask IT about VLAN/VPN routing); and "
+        "Windows Firewall on that PC, which can drop all traffic on a 'Public' network "
+        "profile." + hint, exc.detail, checks=checks)
 
 
 def open_connection(spec: ConnectionSpec) -> tuple[object, dict]:
