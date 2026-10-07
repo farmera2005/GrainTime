@@ -57,6 +57,9 @@ class Site(Base):
     # Connection. Host + static port, never instance-name resolution.
     host: Mapped[str] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer)
+    # Optional named instance (e.g. SQLEXPRESS). Only used to look up the port via
+    # SQL Server Browser when testing, or when the saved port stops answering.
+    instance_name: Mapped[str | None] = mapped_column(String(128))
     database_name: Mapped[str] = mapped_column(String(128))
     username: Mapped[str] = mapped_column(String(128))
     # Fernet ciphertext. Write-only: never returned by the API, never logged.

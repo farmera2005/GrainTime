@@ -22,6 +22,11 @@ elevators. See README.md for install, services and deployment notes.
   `collector_jobs` (`test_connection`, `discovery`; later preview and
   backfill). The collector claims jobs with `FOR UPDATE SKIP LOCKED`, runs at
   most one per site, and wipes `params` when a job finishes.
+- Sites store host + port. An optional instance name lets the collector look
+  the port up via SQL Server Browser (UDP 1434, `sitedb.browse_instances`) on
+  Test connection, or when a saved port stops answering
+  (`sitedb.open_connection`). Failure diagnosis lists the server's instances
+  and detects addresses inside Docker's own network.
 - Code: `backend/graintime/{common,api,collector}`, `backend/migrations`,
   `web/src`. The setup wizard and the admin panel share `SiteForm`,
   `DiscoveryPanel` and `DefaultsForm`, so the first site is registered through

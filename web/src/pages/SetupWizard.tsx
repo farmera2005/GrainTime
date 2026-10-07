@@ -274,7 +274,11 @@ function PrepNotes() {
       <summary>Before you start: preparing the site's SQL Server</summary>
       <ol className="small">
         <li>Enable <strong>TCP/IP</strong> for the instance in SQL Server Configuration Manager (off by default on Express).</li>
-        <li>Give the instance a <strong>static TCP port</strong> (IP Addresses → IPAll → TCP Port; clear “TCP Dynamic Ports”), then restart the SQL Server service.</li>
+        <li>
+          Named instance (<code>SERVER\SQLEXPRESS</code>)? Enter the instance name and leave the port blank; Test
+          connection looks it up (the <strong>SQL Server Browser</strong> service must be running). A static TCP port
+          (IP Addresses → IPAll → TCP Port) is still more reliable.
+        </li>
         <li>Turn on <strong>SQL Server and Windows Authentication mode</strong> (Server Properties → Security), then restart the service.</li>
         <li>Add a <strong>Windows Firewall</strong> inbound rule at the site for that TCP port from this server.</li>
         <li>

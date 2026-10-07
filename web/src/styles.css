@@ -122,3 +122,5 @@ tr.archived td { color: var(--muted); }
 button.danger { background: var(--error-text); border-color: var(--error-text); color: var(--surface); align-self: flex-start; }
 .skip { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
   border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
+.instances ul { margin: 4px 0 0; padding-left: 20px; }
+.instances button.link { padding: 0 4px; }

@@ -36,7 +36,7 @@ def job_key(job: CollectorJob) -> str:
     if job.site_id is not None:
         return f"site:{job.site_id}"
     c = job.params.get("connection") or {}
-    return f"conn:{c.get('host')}:{c.get('port')}/{c.get('database')}"
+    return f"conn:{c.get('host')}:{c.get('port') or c.get('instance_name')}/{c.get('database')}"
 
 
 def spec_for_job(db, job: CollectorJob) -> tuple[sitedb.ConnectionSpec, str]:
@@ -53,17 +53,20 @@ def spec_for_job(db, job: CollectorJob) -> tuple[sitedb.ConnectionSpec, str]:
             raise sitedb.SiteConnectionError("login_failed", "No password was entered",
                                              "Enter the SQL login's password.")
         spec = sitedb.ConnectionSpec(
-            host=conn["host"], port=int(conn["port"]), database=conn["database"],
+            host=conn["host"], port=int(conn["port"]) if conn.get("port") else None,
+            instance_name=conn.get("instance_name") or None, database=conn["database"],
             username=conn["username"], password=password, encrypt=conn.get("encrypt", "yes"),
             trust_server_certificate=bool(conn.get("trust_server_certificate")))
     elif site is not None:
         spec = sitedb.ConnectionSpec(
-            host=site.host, port=site.port, database=site.database_name, username=site.username,
+            host=site.host, port=site.port, instance_name=site.instance_name,
+            database=site.database_name, username=site.username,
             password=crypto.decrypt(site.password_encrypted), encrypt=site.encrypt,
             trust_server_certificate=site.trust_server_certificate)
     else:
         raise ValueError("job has neither a site nor connection details")
-    return spec, f"{spec.host}:{spec.port} / {spec.database} as {spec.username}"
+    where = spec.host + (f"\\{spec.instance_name}" if spec.instance_name else "")
+    return spec, f"{where}:{spec.port or '?'} / {spec.database} as {spec.username}"
 
 
 class JobRunner:
@@ -152,13 +155,14 @@ class JobRunner:
         log.info("job started", extra={"job_id": job_id, "kind": kind, "target": target})
         t0 = time.monotonic()
         try:
-            conn = sitedb.connect(spec)
+            conn, notes = sitedb.open_connection(spec)
         except sitedb.SiteConnectionError as exc:
             log.info("job connection failed", extra={"job_id": job_id, "code": exc.code})
             return self._finish(job_id, "failed", error=exc.as_dict())
         try:
             if kind == "test_connection":
                 info = sitedb.server_info(conn)
+                info.update(notes)  # resolved_port / port_entered when looked up
                 info["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
                 self._finish(job_id, "succeeded", result=info)
             elif kind == "discovery":

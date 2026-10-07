@@ -10,11 +10,25 @@ HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
 CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{1,19}$")
 
 
+INSTANCE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$#]{0,127}$")
+
+
+def validate_instance(v: str | None) -> str | None:
+    v = (v or "").strip()
+    if not v:
+        return None
+    if v.upper() == "MSSQLSERVER":
+        return None  # the default instance has no name
+    if not INSTANCE_RE.match(v):
+        raise ValueError("Instance names use letters, digits and _ (e.g. SQLEXPRESS).")
+    return v
+
+
 def validate_host(v: str) -> str:
     v = v.strip()
     if "\\" in v:
-        raise ValueError("Enter the host only, not HOST\\INSTANCE. Named instances use dynamic "
-                         "ports; give the instance a static TCP port and enter that port below.")
+        raise ValueError("Enter the server name here and the instance name (after the \\) in "
+                         "the Instance field.")
     if "," in v or ":" in v and not _is_ipv6(v):
         raise ValueError("Enter the port in the Port field, not in the host.")
     if not (HOST_RE.match(v) or _is_ip(v)):
@@ -103,7 +117,10 @@ class Defaults(BaseModel):
 
 class ConnectionFields(BaseModel):
     host: str = Field(min_length=1, max_length=255)
-    port: int = Field(ge=1, le=65535)
+    # Optional for Test connection: with an instance name, the collector looks
+    # the port up via SQL Server Browser. Required when saving a site.
+    port: int | None = Field(default=None, ge=1, le=65535)
+    instance_name: str | None = Field(default=None, max_length=128)
     database: str = Field(min_length=1, max_length=128)
     username: str = Field(min_length=1, max_length=128)
     # Write-only. Optional when testing a saved site (the stored one is used).
@@ -116,11 +133,24 @@ class ConnectionFields(BaseModel):
     def _host(cls, v: str) -> str:
         return validate_host(v)
 
+    @field_validator("instance_name")
+    @classmethod
+    def _instance(cls, v):
+        return validate_instance(v)
+
+    @model_validator(mode="after")
+    def _port_or_instance(self):
+        if self.port is None and not self.instance_name:
+            raise ValueError("Enter the TCP port, or the instance name so the port can be "
+                             "looked up.")
+        return self
+
     def __repr__(self) -> str:
         return f"ConnectionFields(host={self.host!r}, port={self.port}, database={self.database!r})"
 
 
 class SiteCreate(ConnectionFields):
+    port: int = Field(ge=1, le=65535)
     name: str = Field(min_length=1, max_length=200)
     code: str = Field(min_length=2, max_length=20)
     address: str | None = Field(default=None, max_length=500)
@@ -145,6 +175,7 @@ class SiteUpdate(BaseModel):
     map_url: str | None = None
     host: str | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
+    instance_name: str | None = Field(default=None, max_length=128)  # "" clears it
     database: str | None = Field(default=None, min_length=1, max_length=128)
     username: str | None = Field(default=None, min_length=1, max_length=128)
     password: str | None = Field(default=None, max_length=256)  # blank/None = keep
@@ -164,6 +195,11 @@ class SiteUpdate(BaseModel):
     def _host(cls, v):
         return None if v is None else validate_host(v)
 
+    @field_validator("instance_name")
+    @classmethod
+    def _instance(cls, v):
+        return validate_instance(v)
+
     @field_validator("map_url")
     @classmethod
     def _url(cls, v):
@@ -178,6 +214,7 @@ class SiteOut(BaseModel):
     map_url: str | None
     host: str
     port: int
+    instance_name: str | None
     database: str
     username: str
     has_password: bool

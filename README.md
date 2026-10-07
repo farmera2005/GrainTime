@@ -141,33 +141,69 @@ before adding it. `docs/sql/discovery_login.sql` creates the temporary
 read-only discovery login.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-port-closed"></a>
-### Port closed: TCP/IP disabled or dynamic port
+### Port closed, or the wrong port
 
-SQL Server Express ships with TCP/IP **disabled**, and named instances use
-**dynamic ports**. In SQL Server Configuration Manager → SQL Server Network
-Configuration → Protocols for *INSTANCE*: enable **TCP/IP**. Under
-IP Addresses → **IPAll**, clear *TCP Dynamic Ports* and set *TCP Port*
-(e.g. 1433). Then restart the SQL Server service. In GrainTime, enter the
-host and this port, never `HOST\INSTANCE`.
+SQL Server Express ships with TCP/IP **disabled**: in SQL Server Configuration
+Manager → SQL Server Network Configuration → Protocols for *INSTANCE*, enable
+**TCP/IP** and restart the SQL Server service.
+
+**Named instances** (what Windows users type as `SERVER\SQLEXPRESS`) usually
+listen on a dynamic port, not 1433. Enter the server name and the **Instance
+name**, leave **TCP port** blank, and click **Test connection**. GrainTime asks
+the site's SQL Server Browser service (UDP 1434) for the port, as Windows
+clients do, and fills it in. You can also paste `SERVER\INSTANCE` into the
+server field. When a port doesn't answer, the error lists every instance the
+server reports, with a button to use its port.
+
+Dynamic ports can change when SQL Server restarts. If a saved port stops
+answering, GrainTime looks the instance up again and reconnects. For
+reliability, still give each instance a static port: IP Addresses → **IPAll**,
+clear *TCP Dynamic Ports*, set *TCP Port*.
+
+<a id="deployment-notes-connecting-to-site-sql-servers-browser-unreachable"></a>
+### Couldn't look up the instance's port
+
+SQL Server Browser didn't answer on UDP 1434. Start the **SQL Server Browser**
+service at the site (Services, or SQL Server Configuration Manager), or enter
+the instance's TCP port directly.
+
+<a id="deployment-notes-connecting-to-site-sql-servers-instance-not-found"></a>
+### No instance with that name
+
+The server's SQL Server Browser doesn't list that instance. The error shows the
+instances it does have; correct the name or use one of their ports.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-host-unreachable"></a>
-### Host unreachable or port filtered
+### Host unreachable
 
-Usually Windows Firewall at the site. Add an inbound rule allowing TCP on the
-SQL port from the Docker host's address. Also check the WAN/VPN route from
-the Docker host to the site.
+Nothing answered at all. Check the address and the network route from the
+Docker host to the site. If you know there's no firewall, also check the two
+notes below.
+
+<a id="deployment-notes-connecting-to-site-sql-servers-docker-network-overlap"></a>
+### Address inside Docker's internal network
+
+Docker gives its containers addresses in 172.17.0.0/16, 172.18.0.0/16 and so
+on. If a site's SQL Server uses an address in the same range, the connection
+never leaves the Docker host. GrainTime detects this and says so. Fix it on
+the Docker host (an IT task, not in GrainTime): set `default-address-pools` in
+`/etc/docker/daemon.json` to a range your network doesn't use, restart Docker,
+and run `docker compose up -d` again.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-dns-failed"></a>
 ### Host name does not resolve
 
-The Docker host can't resolve the name. Use the server's IP address, or fix
-DNS.
+The Docker host can't resolve the name. Windows PCs often find short server
+names through NetBIOS/WINS, which Linux doesn't use, so a name that works in
+SSMS can still fail here. Use the server's IP address, or ask IT to add the
+name to DNS.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-mixed-mode-disabled"></a>
 ### SQL authentication (mixed mode) disabled
 
 Windows authentication from a Linux container isn't practical, so GrainTime
-uses a SQL login. In SSMS: Server Properties → Security → *SQL Server and
+uses a SQL login. If the other systems sign in with a Windows/domain account
+(`DOMAIN\user`), create a SQL login for GrainTime instead. In SSMS: Server Properties → Security → *SQL Server and
 Windows Authentication mode*, then restart the service.
 
 <a id="deployment-notes-connecting-to-site-sql-servers-login-failed"></a>

@@ -24,14 +24,16 @@ from .security import get_db, require_admin
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
 
 # Fields shown in the audit log (the password is recorded only as "(changed)").
-AUDIT_FIELDS = ("name", "code", "address", "map_url", "host", "port", "database_name", "username",
+AUDIT_FIELDS = ("name", "code", "address", "map_url", "host", "port", "instance_name",
+                "database_name", "username",
                 "encrypt", "trust_server_certificate", "polling_enabled", "show_on_dashboard",
                 "show_on_public")
 
 
 def site_out(s: Site) -> SiteOut:
     return SiteOut(id=s.id, name=s.name, code=s.code, address=s.address, map_url=s.map_url,
-                   host=s.host, port=s.port, database=s.database_name, username=s.username,
+                   host=s.host, port=s.port, instance_name=s.instance_name,
+                   database=s.database_name, username=s.username,
                    has_password=bool(s.password_encrypted), encrypt=s.encrypt,
                    trust_server_certificate=s.trust_server_certificate,
                    polling_enabled=s.polling_enabled, show_on_dashboard=s.show_on_dashboard,
@@ -68,6 +70,7 @@ def create_site(body: SiteCreate, db: DbSession = Depends(get_db),
         raise HTTPException(409, f"Short code {body.code} is already used by another site.")
     site = Site(name=body.name.strip(), code=body.code, address=body.address,
                 map_url=body.map_url, host=body.host, port=body.port,
+                instance_name=body.instance_name,
                 database_name=body.database, username=body.username,
                 password_encrypted=crypto.encrypt(body.password), encrypt=body.encrypt,
                 trust_server_certificate=body.trust_server_certificate,
@@ -203,7 +206,8 @@ def queue_test_connection(body: TestConnectionIn, db: DbSession = Depends(get_db
     if body.connection is not None:
         c = body.connection
         params["connection"] = {
-            "host": c.host, "port": c.port, "database": c.database, "username": c.username,
+            "host": c.host, "port": c.port, "instance_name": c.instance_name,
+            "database": c.database, "username": c.username,
             "encrypt": c.encrypt, "trust_server_certificate": c.trust_server_certificate,
             # Ciphertext only, wiped by the collector when the job ends.
             "password_encrypted": (base64.b64encode(crypto.encrypt(c.password)).decode()

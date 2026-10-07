@@ -34,7 +34,8 @@ export type Encrypt = "yes" | "no" | "strict";
 
 export type ConnectionFields = {
   host: string;
-  port: number;
+  port: number | null;
+  instance_name?: string | null;
   database: string;
   username: string;
   password?: string;
@@ -50,6 +51,7 @@ export type Site = {
   map_url: string | null;
   host: string;
   port: number;
+  instance_name: string | null;
   database: string;
   username: string;
   has_password: boolean;
@@ -71,7 +73,16 @@ export type SiteInput = Omit<ConnectionFields, "password"> & {
 
 export type SiteSwitches = { polling_enabled: boolean; show_on_dashboard: boolean; show_on_public: boolean };
 
-export type JobError = { code: string; cause: string; fix: string; docs?: string; detail?: string };
+export type SqlInstance = { server: string | null; instance: string; version: string | null; tcp_port: number | null };
+
+export type JobError = {
+  code: string;
+  cause: string;
+  fix: string;
+  docs?: string;
+  detail?: string;
+  instances?: SqlInstance[];
+};
 
 export type Job = {
   id: number;

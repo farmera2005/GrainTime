@@ -12,6 +12,12 @@ from graintime.common.models import CollectorJob
 from .conftest import SITE
 
 
+@pytest.fixture(autouse=True)
+def no_real_browser(monkeypatch):
+    # Failure diagnosis asks SQL Server Browser; keep unit tests off the network.
+    monkeypatch.setattr(sitedb, "browse_instances", lambda *a, **k: None)
+
+
 @pytest.fixture
 def site_id(admin_client):
     return admin_client.post("/api/admin/sites", json=SITE).json()["id"]

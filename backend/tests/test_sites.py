@@ -49,7 +49,7 @@ def test_duplicate_code_rejected(admin_client):
 
 def test_validation_messages(admin_client):
     r = admin_client.post("/api/admin/sites", json={**SITE, "host": "SCALE01\\SQLEXPRESS"})
-    assert r.status_code == 422 and "static TCP port" in r.text
+    assert r.status_code == 422 and "Instance field" in r.text
     assert admin_client.post("/api/admin/sites", json={**SITE, "port": 70000}).status_code == 422
     assert admin_client.post("/api/admin/sites", json={**SITE, "password": ""}).status_code == 422
 
@@ -98,3 +98,17 @@ def test_discovery_job_queued_and_audited(admin_client):
     with get_sessionmaker()() as db:
         assert db.scalars(select(AuditLog.action).where(
             AuditLog.action == "site.discovery_started")).one()
+
+
+def test_instance_name_saved_and_test_without_port(admin_client):
+    r = admin_client.post("/api/admin/sites", json={**SITE, "instance_name": "SQLEXPRESS", "port": 49721})
+    assert r.status_code == 201 and r.json()["instance_name"] == "SQLEXPRESS"
+    sid = r.json()["id"]
+    assert admin_client.patch(f"/api/admin/sites/{sid}", json={"instance_name": ""}).json()["instance_name"] is None
+    conn = {k: SITE[k] for k in ("host", "database", "username", "password")}
+    r = admin_client.post("/api/admin/jobs/test-connection",
+                          json={"connection": {**conn, "instance_name": "SQLEXPRESS"}})
+    assert r.status_code == 202
+    with get_sessionmaker()() as db:
+        params = db.get(CollectorJob, r.json()["id"]).params["connection"]
+    assert params["port"] is None and params["instance_name"] == "SQLEXPRESS"

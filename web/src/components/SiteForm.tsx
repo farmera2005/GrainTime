@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError, ConnectionFields, Encrypt, Site, SiteInput } from "../api";
 import { useJob } from "../useJob";
 import { Field, Notice } from "./Field";
@@ -11,6 +11,7 @@ type FormState = {
   map_url: string;
   host: string;
   port: string;
+  instance_name: string;
   database: string;
   username: string;
   password: string;
@@ -26,6 +27,7 @@ function fromSite(s?: Site): FormState {
     map_url: s?.map_url ?? "",
     host: s?.host ?? "",
     port: s ? String(s.port) : "1433",
+    instance_name: s?.instance_name ?? "",
     database: s?.database ?? "",
     username: s?.username ?? "",
     password: "",
@@ -54,9 +56,35 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
     setErrors((e) => ({ ...e, [k === "database" ? "database" : k]: "" }));
   };
 
+  // Typing SERVER\INSTANCE (as Windows clients use) splits it into the two fields.
+  // With an instance name, a still-default port is cleared so it gets looked up.
+  const setHost = (value: string) => {
+    const i = value.indexOf("\\");
+    if (i < 0) return set("host", value);
+    setF((prev) => ({
+      ...prev,
+      host: value.slice(0, i),
+      instance_name: value.slice(i + 1),
+      port: !site && prev.port === "1433" ? "" : prev.port,
+    }));
+  };
+  const setInstance = (value: string) =>
+    setF((prev) => ({
+      ...prev,
+      instance_name: value,
+      port: !site && value.trim() && prev.port === "1433" ? "" : prev.port,
+    }));
+
+  // A port looked up from the instance name is filled into the form.
+  useEffect(() => {
+    const p = testJob?.status === "succeeded" ? testJob.result?.resolved_port : undefined;
+    if (p) setF((prev) => ({ ...prev, port: String(p) }));
+  }, [testJob?.status, testJob?.result?.resolved_port]);
+
   const connection = (): ConnectionFields => ({
     host: f.host.trim(),
-    port: Number(f.port),
+    port: f.port ? Number(f.port) : null,
+    instance_name: f.instance_name.trim() || null,
     database: f.database.trim(),
     username: f.username.trim(),
     password: f.password || undefined,
@@ -88,6 +116,11 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
 
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
+    if (!f.port) {
+      setErrors({ port: "Enter the port, or click Test connection to look it up from the instance name." });
+      setMessage("Please fix the highlighted fields.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
     setErrors({});
@@ -134,11 +167,20 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
       <fieldset>
         <legend>Scale database connection (CompuWeigh SQL Server)</legend>
         <div className="row">
-          <Field label="Host or IP address" error={errors.host} hint="Host only — not HOST\INSTANCE">
-            <input value={f.host} onChange={(e) => set("host", e.target.value)} placeholder="10.1.2.3" required />
+          <Field label="Server name or IP address" error={errors.host} hint="You can paste SERVER\INSTANCE here">
+            <input value={f.host} onChange={(e) => setHost(e.target.value)} placeholder="10.1.2.3" required />
           </Field>
-          <Field label="TCP port" error={errors.port} hint="The instance's static TCP port">
-            <input value={f.port} onChange={(e) => set("port", e.target.value.replace(/\D/g, ""))} inputMode="numeric" required />
+          <Field label="Instance name (optional)" error={errors.instance_name} hint="e.g. SQLEXPRESS. Blank for the default instance">
+            <input value={f.instance_name} onChange={(e) => setInstance(e.target.value)} placeholder="SQLEXPRESS" />
+          </Field>
+        </div>
+        <div className="row">
+          <Field
+            label="TCP port"
+            error={errors.port}
+            hint={f.instance_name.trim() ? "Leave blank and click Test connection to look it up" : "Usually 1433 for the default instance"}
+          >
+            <input value={f.port} onChange={(e) => set("port", e.target.value.replace(/\D/g, ""))} inputMode="numeric" />
           </Field>
         </div>
         <div className="row">
@@ -179,7 +221,7 @@ export function SiteForm(props: { site?: Site; onSaved: (s: Site) => void; submi
           </button>
           <span className="muted small">Runs from the collector, read-only, 5 s connect timeout.</span>
         </div>
-        <TestConnectionOutcome job={testJob} />
+        <TestConnectionOutcome job={testJob} onUsePort={(p) => set("port", String(p))} />
       </fieldset>
 
       {message && !Object.values(errors).some(Boolean) ? <Notice kind="error">{message}</Notice> : null}
