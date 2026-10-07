@@ -1,0 +1,30 @@
+# The built web app (web/dist) is committed so that deploying never downloads
+# npm packages. This check fails if web/dist does not match web/src.
+name: web-dist up to date
+on:
+  push:
+    paths: ["web/**", ".github/workflows/web-dist.yml"]
+  pull_request:
+    paths: ["web/**", ".github/workflows/web-dist.yml"]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - name: Fail if web/dist is stale
+        run: |
+          git add -N web/dist
+          if ! git diff --quiet -- web/dist; then
+            git diff --stat -- web/dist
+            echo "::error::web/dist is out of date. Run 'npm run build' in web/ and commit web/dist."
+            exit 1
+          fi

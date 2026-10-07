@@ -38,20 +38,14 @@ The wizard walks through:
 
 ### If the build fails
 
-The build downloads packages from npm (web), PyPI (api, collector), and the
-Debian and Microsoft package servers (collector). Failures are almost always
-network-related:
+The build downloads Python packages from PyPI (api, collector) and the
+Microsoft ODBC driver from the Debian and Microsoft package servers
+(collector). The web app is **not** built during deployment: its compiled
+files are committed in `web/dist`, so no npm packages are downloaded and no
+certificates need installing. Failures are almost always network-related:
 
-- **Just run `docker compose up -d --build` again.** Downloads retry
-  automatically and are cached, so a second run continues where the first
-  stopped.
-- **`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, `SELF_SIGNED_CERT_IN_CHAIN` or
-  `certificate verify failed`?** A firewall is inspecting HTTPS. Put your
-  organisation's root certificate (PEM, `.crt` or `.pem`) in the
-  [`certs/`](certs/README.md) folder and rebuild. Every image build then trusts
-  it. Alternatively, ask IT to exempt `registry.npmjs.org`, `pypi.org`,
-  `files.pythonhosted.org`, `deb.debian.org` and `packages.microsoft.com` from
-  inspection.
+- **Just run `docker compose up -d --build` again.** A second run reuses
+  everything that already downloaded.
 - **Behind a proxy?** Docker needs the proxy configured for builds (Linux:
   the `proxies` section of `~/.docker/config.json` and a systemd drop-in for
   the daemon; Docker Desktop: Settings → Resources → Proxies).
@@ -202,4 +196,6 @@ TEST_DATABASE_URL=postgresql+psycopg://user:pw@127.0.0.1:5432/graintime_test pyt
 
 # frontend
 cd web && npm install && npm run build      # or: npm run dev (proxies /api to :8000)
+# web/dist is committed (deployment never runs npm): after changing web/src,
+# run `npm run build` and commit web/dist. A GitHub check fails if it is stale.
 ```

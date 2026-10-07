@@ -12,9 +12,12 @@ elevators. See README.md for install, services and deployment notes.
   Sites, users, settings and the first admin come from the browser (setup
   wizard, then the admin panel). Env vars are optional overrides only
   (`GRAINTIME_*`, used by tests). Don't add required env vars or config files.
-- Image builds trust any root certificates placed in `certs/` (passed to every
-  build as the `certs` additional context), for networks that inspect HTTPS.
-  Never "fix" certificate errors by disabling TLS verification.
+- **The built web app (`web/dist`) is committed.** The web image only copies
+  it into nginx, so deploying never downloads npm packages: the deployment
+  network inspects HTTPS to npm, and nobody should have to install a
+  certificate. After any change under `web/`, run `npm run build` and commit
+  `web/dist` (the `web-dist up to date` GitHub check fails otherwise). Never
+  "fix" certificate errors by disabling TLS verification.
 - **Only the collector talks to site databases.** The api queues work in
   `collector_jobs` (`test_connection`, `discovery`; later preview and
   backfill). The collector claims jobs with `FOR UPDATE SKIP LOCKED`, runs at
@@ -75,7 +78,7 @@ elevators. See README.md for install, services and deployment notes.
 docker compose up -d --build                 # full stack, then open :8080
 cd backend && TEST_DATABASE_URL=postgresql+psycopg://u:p@host:5432/graintime_test pytest
 # optional SQL Server integration test: MSSQL_TEST_HOST/PORT/DATABASE/USER/PASSWORD
-cd web && npm run build                      # typecheck + build
+cd web && npm run build                      # typecheck + build; commit web/dist
 ```
 
 Tests cover the setup flow and first-run window, the admin role on every admin

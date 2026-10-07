@@ -3,7 +3,6 @@
 *.key
 secrets/
 # discovery output may contain site data
-discovery/out/
 report.md
 report.json
 # python
@@ -14,6 +13,5 @@ __pycache__/
 # node
 node_modules/
 dist/
-# organisation root certificates for TLS-inspecting networks (see certs/README.md)
-certs/*
-!certs/README.md
+# the built web app is committed so deployment never downloads npm packages
+!web/dist/
