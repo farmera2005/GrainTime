@@ -250,15 +250,36 @@ works by IP address and needs nothing set up on the GrainTime server.
 Encryption and *Trust the server certificate* behave as for SQL logins.
 *Strict (TDS 8)* encryption isn't available with this driver.
 
-If SQL Server rejects the sign-in:
+<a id="deployment-notes-connecting-to-site-sql-servers-windows-credentials-rejected"></a>
+#### "Windows on the SQL Server PC did not accept the account" (SQL error 18452)
 
-- The account needs a login and read access on the scale database:
-  `CREATE LOGIN [DOMAIN\user] FROM WINDOWS;` then a database user in
-  `db_datareader` (see `docs/sql/discovery_login.sql`).
-- Check the domain, user name and password. A locked or expired domain account
-  fails here too.
-- Some domains turn NTLM off by policy. Use a SQL Server login for GrainTime
-  there.
+SQL Server words this as *"The login is from an untrusted domain and cannot
+be used with Integrated authentication"*, but it almost always means the
+Windows sign-in itself failed, before SQL Server looked for a login. Check, in
+order:
+
+1. **Domain, user name and password.** A wrong password gives exactly this
+   message. The domain is normally the short NetBIOS name (`MERCER`), not the
+   DNS name (`mercer.local`). Failed attempts count toward account lockout,
+   so check before testing repeatedly.
+2. **Is the SQL Server PC joined to that domain** and able to reach a domain
+   controller? A workgroup PC can't check domain accounts. Use the PC's own
+   computer name as the domain with a local Windows account, or a SQL login.
+3. **NTLM restrictions or Extended Protection.** Some domains block NTLM
+   ("Network security: Restrict NTLM"), and SQL Server's Extended Protection
+   set to *Required* rejects it. Use a SQL Server login in that case.
+
+The exact reason is in **Event Viewer → Windows Logs → Security** on the SQL
+Server PC: event **4625** at the time of the test. *Failure Reason* and *Sub
+Status* say which: `0xC000006A` wrong password, `0xC0000064` unknown user,
+`0xC0000234` account locked, `0xC000005E` no domain controller reachable.
+
+<a id="deployment-notes-connecting-to-site-sql-servers-windows-no-sql-login"></a>
+#### "Windows accepted the account, but SQL Server would not let it in" (18456)
+
+The Windows sign-in worked, but SQL Server has no login for the account or it
+has no access to the database: `CREATE LOGIN [DOMAIN\user] FROM WINDOWS;` then
+a database user in `db_datareader` (see `docs/sql/discovery_login.sql`).
 
 Windows sign-in doesn't get past a firewall: if Test connection reports that
 the SQL port doesn't answer, fix that first.

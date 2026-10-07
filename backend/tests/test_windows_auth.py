@@ -84,9 +84,9 @@ def test_ntlm_token_is_produced():
 
 
 @pytest.mark.parametrize("message,code", [
-    ("Login failed. The login is from an untrusted domain and cannot be used with Integrated authentication. (18452)",
-     "windows_login_failed"),
-    ("Login failed for user 'MERCER\\svc'. (18456)", "windows_login_failed"),
+    ("('Login failed. The login is from an untrusted domain and cannot be used with Integrated authentication.', None)",
+     "windows_credentials_rejected"),
+    ("Login failed for user 'MERCER\\svc'. (18456)", "windows_no_sql_login"),
     ("SpnegoError: something", "windows_login_failed"),
     ("[('SSL routines', '', 'certificate verify failed')]", "cert_untrusted"),
     ("timed out", "host_unreachable"),
@@ -154,4 +154,21 @@ def test_ntlm_reaches_real_server_and_is_rejected_cleanly():
                         trust_server_certificate=True)
     with pytest.raises(SiteConnectionError) as e:
         sitedb.connect(sp)
-    assert e.value.code == "windows_login_failed", e.value.as_dict()
+    assert e.value.code == "windows_credentials_rejected", e.value.as_dict()
+    assert "MERCER\\svc" in e.value.cause and "event 4625" in e.value.fix
+
+
+def test_credentials_rejected_explains_causes_and_lockout():
+    err = sitedb.classify_windows_error(
+        Exception("Login failed. The login is from an untrusted domain and cannot be used with "
+                  "Integrated authentication."), spec(domain="mercer.local"))
+    assert err.code == "windows_credentials_rejected"
+    assert "MERCER\\svc_graintime" not in err.cause and "mercer.local\\svc_graintime" in err.cause
+    assert "NetBIOS" in err.fix and "'MERCER'" in err.fix
+    assert "lockout" in err.fix and "4625" in err.fix
+    assert err.as_dict()["docs"].endswith("windows-credentials-rejected")
+
+
+def test_short_domain_gets_no_dns_hint():
+    err = sitedb.classify_windows_error(Exception("untrusted domain"), spec())
+    assert "NetBIOS" not in err.fix

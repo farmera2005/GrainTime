@@ -510,23 +510,49 @@ def _connect_pytds(spec: ConnectionSpec, **login):
     except SiteConnectionError:
         raise
     except Exception as exc:  # pytds, OpenSSL and pyspnego raise various types
-        raise classify_windows_error(exc) from None
+        raise classify_windows_error(exc, spec) from None
 
 
-def classify_windows_error(exc: Exception) -> SiteConnectionError:
-    low = str(exc).lower()
-    if "untrusted domain" in low or "18452" in low or "login failed" in low or "18456" in low:
+LOCKOUT_WARNING = ("Each failed attempt counts toward the domain's account lockout, so check "
+                   "the details before testing again.")
+
+
+def classify_windows_error(exc: Exception, spec: ConnectionSpec | None = None) -> SiteConnectionError:
+    msg = str(exc)
+    low = msg.lower()
+    principal = windows_principal(spec) if spec else "the account"
+    if "untrusted domain" in low or "18452" in low:
+        # SSPI/NTLM handshake refused by Windows before SQL Server looks up a login.
+        domain_hint = ""
+        if spec and spec.domain and "." in spec.domain:
+            domain_hint = (f" The domain '{spec.domain}' looks like a DNS name; NTLM normally "
+                           f"expects the short (NetBIOS) name, e.g. '{spec.domain.split('.')[0].upper()}'.")
         return SiteConnectionError(
-            "windows_login_failed", "SQL Server rejected the Windows sign-in",
-            "Check the domain, user name and password. The account needs a SQL Server login "
-            "(CREATE LOGIN [DOMAIN\\user] FROM WINDOWS) with read access to the database. "
-            "GrainTime signs in with NTLM, the method Windows PCs fall back to; if your domain "
-            "has turned NTLM off, use a SQL Server login for GrainTime instead.", str(exc)[:500])
+            "windows_credentials_rejected",
+            f"Windows on the SQL Server PC did not accept {principal}",
+            "SQL Server reports this as 'untrusted domain', but it almost always means the Windows "
+            "sign-in itself failed, before SQL Server checks for a login. In order of likelihood: "
+            "(1) the domain, user name or password is wrong (a wrong password gives exactly this "
+            "message);" + domain_hint + " (2) the SQL Server PC is not joined to that domain, or "
+            "cannot reach a domain controller (on a workgroup PC, use its own computer name as the "
+            "domain and a local Windows account); (3) the domain restricts NTLM, or SQL Server "
+            "requires Extended Protection. The exact reason is in the SQL Server PC's Windows "
+            "Event Viewer > Security log, event 4625 at the time of the test (Failure Reason "
+            "and Sub Status). " + LOCKOUT_WARNING, msg[:500])
+    if "login failed" in low or "18456" in low:
+        return SiteConnectionError(
+            "windows_no_sql_login",
+            f"Windows accepted {principal}, but SQL Server would not let it in",
+            "The account signed in to Windows correctly, but SQL Server has no login for it or "
+            "it has no access to this database. On the SQL Server: CREATE LOGIN [DOMAIN\\user] "
+            "FROM WINDOWS; then add a user for it in the scale database with db_datareader "
+            "(docs/sql/discovery_login.sql). The SQL Server error log shows the exact reason "
+            "(error 18456 and its state number).", msg[:500])
     if "spnego" in low or "ntlm" in low:
         return SiteConnectionError(
             "windows_login_failed", "The Windows sign-in could not be completed",
             "Check the domain and user name (DOMAIN\\user or user@domain), and the password.",
-            str(exc)[:500])
+            msg[:500])
     err = classify_driver_error(exc)
     if err.code == "mixed_mode_disabled":  # not relevant to Windows sign-in
         err = SiteConnectionError("windows_login_failed", "SQL Server rejected the Windows sign-in",
