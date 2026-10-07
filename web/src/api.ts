@@ -69,6 +69,8 @@ export type SiteInput = Omit<ConnectionFields, "password"> & {
   password?: string;
 };
 
+export type SiteSwitches = { polling_enabled: boolean; show_on_dashboard: boolean; show_on_public: boolean };
+
 export type JobError = { code: string; cause: string; fix: string; docs?: string; detail?: string };
 
 export type Job = {
@@ -144,7 +146,11 @@ export const api = {
   listSites: () => request<Site[]>("GET", "/api/admin/sites"),
   getSite: (id: number) => request<Site>("GET", `/api/admin/sites/${id}`),
   createSite: (s: SiteInput) => request<Site>("POST", "/api/admin/sites", s),
-  updateSite: (id: number, s: Partial<SiteInput>) => request<Site>("PATCH", `/api/admin/sites/${id}`, s),
+  updateSite: (id: number, s: Partial<SiteInput & SiteSwitches>) => request<Site>("PATCH", `/api/admin/sites/${id}`, s),
+  archiveSite: (id: number) => request<Site>("POST", `/api/admin/sites/${id}/archive`),
+  restoreSite: (id: number) => request<Site>("POST", `/api/admin/sites/${id}/restore`),
+  deleteSite: (id: number, confirmName: string) =>
+    request<{ deleted: boolean }>("DELETE", `/api/admin/sites/${id}`, { confirm_name: confirmName }),
   testConnection: (b: { site_id?: number; connection?: ConnectionFields }) =>
     request<Job>("POST", "/api/admin/jobs/test-connection", b),
   startDiscovery: (siteId: number, b: { extra_tables: string[]; include_samples: boolean; mask: boolean }) =>

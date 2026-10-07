@@ -108,6 +108,17 @@ export function SetupWizard({ status, refresh }: { status: SetupStatus; refresh:
               await go("Discovery");
             }}
           />
+          {!site ? (
+            <div className="skip">
+              <span className="muted small">
+                Not ready to connect a site yet? You can add sites at any time from the admin panel
+                (Sites → Add site).
+              </span>
+              <button type="button" className="secondary" onClick={() => go("Finish")}>
+                Skip for now
+              </button>
+            </div>
+          ) : null}
         </>
       )}
       {step === "Discovery" && (
@@ -130,14 +141,22 @@ export function SetupWizard({ status, refresh }: { status: SetupStatus; refresh:
           <ul>
             <li>Administrator account created</li>
             <li>Defaults saved</li>
-            <li>{site ? `Site “${site.name}” added (polling off)` : "No site added yet"}</li>
-            <li>{status.steps?.discovery ? "Discovery report ready to download" : "Discovery not run yet"}</li>
+            <li>{site ? `Site “${site.name}” added (polling off)` : "No site added yet (skipped)"}</li>
+            {site ? (
+              <li>{status.steps?.discovery ? "Discovery report ready to download" : "Discovery not run yet"}</li>
+            ) : null}
           </ul>
-          <p>
-            Next: send the discovery report to the project team. Once the mapping is confirmed, polling is turned on
-            for the site from the admin panel. Everything else, including adding more sites, happens in the admin
-            panel.
-          </p>
+          {site ? (
+            <p>
+              Next: send the discovery report to the project team. Once the mapping is confirmed, polling is turned on
+              for the site from the admin panel. Sites can be edited, and more added, there at any time.
+            </p>
+          ) : (
+            <p>
+              Next: in the admin panel, open <strong>Sites → Add site</strong> when you are ready to connect the first
+              scale database, then run discovery on it from the site's page.
+            </p>
+          )}
           <div className="actions">
             <button
               onClick={async () => {

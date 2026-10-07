@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..common import audit, crypto
 from ..common.models import CollectorJob, Site, User
-from .schemas import DiscoveryIn, SiteCreate, SiteOut, SiteUpdate, TestConnectionIn
+from .schemas import DiscoveryIn, SiteCreate, SiteDelete, SiteOut, SiteUpdate, TestConnectionIn
 from .security import get_db, require_admin
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
@@ -100,11 +101,22 @@ def update_site(site_id: int, body: SiteUpdate, db: DbSession = Depends(get_db),
         data["database_name"] = data.pop("database")
     if data.get("code") and _code_taken(db, data["code"], exclude_id=site.id):
         raise HTTPException(409, f"Short code {data['code']} is already used by another site.")
+    if data.get("polling_enabled") and not site.polling_enabled:
+        # Ticket polling needs a confirmed mapping profile, which no site has yet.
+        raise HTTPException(409, "Polling can be turned on once this site has a confirmed "
+                                 "mapping profile (built from its discovery report).")
+    if site.archived_at is not None and (data.get("show_on_dashboard") or data.get("show_on_public")):
+        raise HTTPException(409, "Restore this site before showing it on the dashboard or "
+                                 "public page.")
+    for k in ("address", "map_url"):
+        if k in data and isinstance(data[k], str):
+            data[k] = data[k].strip() or None
     for k, v in data.items():
         if v is None and k in ("name", "code", "host", "port", "database_name", "username",
-                               "encrypt", "trust_server_certificate"):
+                               "encrypt", "trust_server_certificate", "polling_enabled",
+                               "show_on_dashboard", "show_on_public"):
             continue  # required fields cannot be cleared
-        setattr(site, k, v)
+        setattr(site, k, v.strip() if k == "name" else v)
     if password:
         site.password_encrypted = crypto.encrypt(password)
     after = _snapshot(site)
@@ -117,6 +129,57 @@ def update_site(site_id: int, body: SiteUpdate, db: DbSession = Depends(get_db),
                      entity_type="site", entity_id=site.id, old=old, new=new)
     db.commit()
     return site_out(site)
+
+
+@router.post("/sites/{site_id}/archive", response_model=SiteOut)
+def archive_site(site_id: int, db: DbSession = Depends(get_db),
+                 user: User = Depends(require_admin)):
+    """Hide the site everywhere and stop polling; all history is kept."""
+    site = _get_site(db, site_id)
+    if site.archived_at is None:
+        before = _snapshot(site)
+        site.archived_at = datetime.now(timezone.utc)
+        site.polling_enabled = site.show_on_dashboard = site.show_on_public = False
+        after = _snapshot(site)
+        old = {k: v for k, v in before.items() if after[k] != v}
+        audit.record(db, actor_id=user.id, actor_name=user.username, action="site.archived",
+                     entity_type="site", entity_id=site.id, old={**old, "archived": False},
+                     new={**{k: after[k] for k in old}, "archived": True})
+        db.commit()
+    return site_out(site)
+
+
+@router.post("/sites/{site_id}/restore", response_model=SiteOut)
+def restore_site(site_id: int, db: DbSession = Depends(get_db),
+                 user: User = Depends(require_admin)):
+    """Bring an archived site back. It returns with polling off and hidden from the
+    public page; switch those back on deliberately."""
+    site = _get_site(db, site_id)
+    if site.archived_at is not None:
+        site.archived_at = None
+        site.show_on_dashboard = True
+        audit.record(db, actor_id=user.id, actor_name=user.username, action="site.restored",
+                     entity_type="site", entity_id=site.id, old={"archived": True},
+                     new={"archived": False, "show_on_dashboard": True})
+        db.commit()
+    return site_out(site)
+
+
+@router.delete("/sites/{site_id}")
+def delete_site(site_id: int, body: SiteDelete, db: DbSession = Depends(get_db),
+                user: User = Depends(require_admin)):
+    """Permanently delete a site and everything stored for it. The admin must type
+    the site's name exactly."""
+    site = _get_site(db, site_id)
+    if body.confirm_name.strip() != site.name:
+        raise HTTPException(400, "The name typed does not match the site's name. Nothing was "
+                                 "deleted.")
+    snapshot = _snapshot(site)
+    audit.record(db, actor_id=user.id, actor_name=user.username, action="site.deleted",
+                 entity_type="site", entity_id=site.id, old=snapshot)
+    db.delete(site)  # collector jobs cascade
+    db.commit()
+    return {"deleted": True}
 
 
 # --- collector jobs -------------------------------------------------------- #

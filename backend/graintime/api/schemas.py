@@ -150,6 +150,9 @@ class SiteUpdate(BaseModel):
     password: str | None = Field(default=None, max_length=256)  # blank/None = keep
     encrypt: Literal["yes", "no", "strict"] | None = None
     trust_server_certificate: bool | None = None
+    polling_enabled: bool | None = None
+    show_on_dashboard: bool | None = None
+    show_on_public: bool | None = None
 
     @field_validator("code")
     @classmethod
@@ -184,6 +187,11 @@ class SiteOut(BaseModel):
     show_on_dashboard: bool
     show_on_public: bool
     archived: bool
+
+
+class SiteDelete(BaseModel):
+    # The site's name, typed by the admin to confirm permanent deletion.
+    confirm_name: str
 
 
 class TestConnectionIn(BaseModel):

@@ -31,7 +31,8 @@ The wizard walks through:
    in; every site can override them later.
 3. **First site.** Name, short code, and the connection to the site's
    CompuWeigh SQL Server, with **Test connection** before saving. The site is
-   saved with polling off.
+   saved with polling off. This step can be skipped: **Skip for now** goes
+   straight to the end of setup, and sites are added later in the admin panel.
 4. **Discovery.** Reads the scale database's structure and a few masked sample
    rows, and shows the report in the browser with download buttons. Send the
    two files to the project team so the mapping profile can be designed.
@@ -51,6 +52,23 @@ certificates need installing. Failures are almost always network-related:
   the daemon; Docker Desktop: Settings → Resources → Proxies).
 - If only one service failed, the others may show as `CANCELED`. That just
   means the build stopped; it isn't a separate error.
+
+### Managing sites after setup
+
+In the admin panel, **Sites** lists every site, with an **Edit** button on each.
+A site's page lets you:
+
+- change its name, code, address, map link and connection details. Leave the
+  password blank to keep the saved one; Test connection works with the saved
+  password.
+- choose where it appears: management dashboard, public page. Polling can be
+  switched on once the site has a confirmed mapping profile.
+- run discovery.
+- **archive** it (hidden everywhere, polling off, history kept, can be
+  restored), or **delete** it permanently, which requires typing the site's
+  name.
+
+Every change is recorded in the audit log.
 
 ### What happens automatically on first start
 
