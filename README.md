@@ -5,8 +5,9 @@ elevators: scale house wall displays, a management dashboard, and a public
 farmer page.
 
 **Status:** Phase 1. Setup, site management, Test connection, Discovery,
-mapping profiles, Preview data, backfill and live ticket collection are in
-place. The wall display, dashboards and public page come next.
+mapping profiles, Preview data, backfill, live ticket collection and the
+customizable statistics dashboard are in place. The wall display and public
+page come next.
 
 ## Install and first run
 
@@ -99,6 +100,31 @@ night re-checks the last 7 days. Every query is a bounded, read-only `SELECT`
 at `READ UNCOMMITTED`. An unreachable site backs off (up to 30 minutes), is
 marked **Stale** in the Sites list, and catches up from the high-water mark
 when it returns. Other sites are never affected.
+
+### The dashboard
+
+Everyone who signs in lands on the **Dashboard**. Each user has their own
+dashboards (up to 20, shown as tabs); the first one, *Overview*, is created
+automatically.
+
+- **Filters** (one row, saved with the dashboard): date range (today,
+  yesterday, last 7/30/90 days, harvest season since Sep 1, year to date, or
+  custom), sites, received or shipped (received by default), commodity.
+- **Widgets**: number tiles (current time on site, trucks on site now, trucks
+  today, median, 90th percentile, completed trucks), *Sites right now*
+  (sortable, flags out-of-date sites), time on site by day, by hour of day,
+  day × hour heatmap, compare sites, how long trucks stay, and tickets
+  included/excluded.
+- **Customize** adds, removes, reorders and resizes widgets (small, half,
+  full), renames them, pins one to a single site, and renames, resets or
+  deletes the dashboard. Changes save immediately.
+- Every chart has a hover tooltip, a **Table** view and a **CSV** download.
+  Live numbers refresh every minute. Dark mode follows the device.
+- Statistics follow the metric definitions exactly; each range widget shows
+  how many tickets were counted and how many were left out (voided, single
+  weigh, over the ceiling).
+
+Admins choose which sites appear with **Show on dashboard** on the site page.
 
 ### Mapping profiles
 

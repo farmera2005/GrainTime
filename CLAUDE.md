@@ -42,6 +42,12 @@ elevators. See README.md for install, services and deployment notes.
 - `common/login_script.py` generates the site login with column-level SELECT
   from a profile. `devtools/mock_gms.py` is a dev-only CompuWeigh GMS mock
   (compose profile `mock`) that uses that script.
+- Statistics: `common/metrics.py` is the one place the metric definitions are
+  implemented (SQL over `tickets`); `api/routes_stats.py` serves them as JSON
+  or CSV to any signed-in user; `api/routes_dashboards.py` stores per-user
+  dashboards (filters + widget list, JSONB). The web dashboard
+  (`web/src/pages/Dashboard.tsx`) draws charts with the hand-written SVG kit
+  in `web/src/charts/charts.tsx` (no chart library; one y-axis per chart).
 - Code: `backend/graintime/{common,api,collector}`, `backend/migrations`,
   `web/src`. The setup wizard and the admin panel share `SiteForm`,
   `DiscoveryPanel` and `DefaultsForm`, so the first site is registered through

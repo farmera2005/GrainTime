@@ -208,6 +208,75 @@ export type Job = {
   finished_at: string | null;
 };
 
+export type Level = "good" | "warning" | "critical" | null;
+
+export type StatsOptions = {
+  sites: { id: number; name: string; code: string }[];
+  commodities: string[];
+  first_date: string | null;
+  today: string;
+  thresholds: { green_max_min: number; yellow_max_min: number };
+  ceiling_hours: number;
+};
+
+export type SiteOverview = {
+  id: number; name: string; code: string;
+  current: { minutes: number | null; trucks: number; basis: string; level: Level };
+  on_site_now: number;
+  oldest_on_site_min: number | null;
+  trucks_today: number;
+  completed_today: number;
+  median_today_min: number | null;
+  p90_today_min: number | null;
+  typical_this_hour_min: number | null;
+  last_update: string | null;
+  stale: boolean;
+  polling: boolean;
+};
+
+export type Summary = {
+  completed: number; median_min: number | null; p90_min: number | null; mean_min: number | null; trucks: number;
+  excluded: { voided: number; single_weigh: number; over_ceiling: number; unknown_status: number };
+  ceiling_hours: number;
+};
+export type ByHour = { hour: number; trucks: number; completed: number; median_min: number | null; p90_min: number | null };
+export type TrendDay = { date: string; completed: number; median_min: number | null; p90_min: number | null };
+export type HeatCell = { dow: number; hour: number; completed: number; median_min: number | null };
+export type CompareRow = { site_id: number; name: string; code: string; completed: number; median_min: number | null; p90_min: number | null };
+export type DistBin = { from_min: number; to_min: number; count: number };
+
+export type WidgetType = "kpi" | "sites_table" | "by_hour" | "trend" | "heatmap" | "compare" | "distribution" | "exclusions";
+export type KpiMetric = "current" | "on_site_now" | "trucks_today" | "median" | "p90" | "completed";
+export type Widget = {
+  id: string;
+  type: WidgetType;
+  title: string | null;
+  size: "S" | "M" | "L";
+  settings: { site_id: number | null; metric: KpiMetric | null; show_p90: boolean };
+};
+export type RangeKey = "today" | "yesterday" | "7d" | "30d" | "90d" | "season" | "ytd" | "custom";
+export type DashFilters = {
+  range: RangeKey;
+  date_from: string | null;
+  date_to: string | null;
+  site_ids: number[];
+  direction: "received" | "shipped";
+  commodity: string | null;
+};
+export type Dashboard = { id: number; name: string; position: number; filters: DashFilters; widgets: Widget[]; updated_at: string };
+export type StatsQuery = { sites?: number[]; from?: string; to?: string; direction: string; commodity?: string | null };
+
+export function statsQuery(q: StatsQuery, format?: "csv"): string {
+  const p = new URLSearchParams();
+  if (q.sites && q.sites.length) p.set("sites", q.sites.join(","));
+  if (q.from) p.set("from", q.from);
+  if (q.to) p.set("to", q.to);
+  p.set("direction", q.direction);
+  if (q.commodity) p.set("commodity", q.commodity);
+  if (format) p.set("format", format);
+  return p.toString();
+}
+
 export class ApiError extends Error {
   status: number;
   fields: Record<string, string>;
@@ -303,4 +372,11 @@ export const api = {
     request<Job>("POST", `/api/admin/sites/${siteId}/backfill`, b),
   collection: (siteId: number) => request<CollectionStatus>("GET", `/api/admin/sites/${siteId}/collection`),
   reportJson: (id: number) => request<Record<string, any>>("GET", `/api/admin/jobs/${id}/report.json`),
+  statsOptions: () => request<StatsOptions>("GET", "/api/stats/options"),
+  stats: <T,>(kind: string, q: StatsQuery) => request<T>("GET", `/api/stats/${kind}?${statsQuery(q)}`),
+  listDashboards: () => request<Dashboard[]>("GET", "/api/dashboards"),
+  createDashboard: (b: { name: string; filters?: DashFilters; widgets?: Widget[] }) => request<Dashboard>("POST", "/api/dashboards", b),
+  saveDashboard: (id: number, b: { name: string; filters: DashFilters; widgets: Widget[] }) => request<Dashboard>("PUT", `/api/dashboards/${id}`, b),
+  resetDashboard: (id: number) => request<Dashboard>("POST", `/api/dashboards/${id}/reset`),
+  deleteDashboard: (id: number) => request<{ deleted: boolean }>("DELETE", `/api/dashboards/${id}`),
 };

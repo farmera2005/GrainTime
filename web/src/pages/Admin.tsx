@@ -1,38 +1,42 @@
 import { useEffect, useState } from "react";
-import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, Site, User } from "../api";
 import { DefaultsForm } from "../components/DefaultsForm";
 import { DataCollection } from "../components/DataCollection";
 import { DiscoveryPanel } from "../components/Discovery";
 import { ago } from "../format";
+import { DashboardPage } from "./Dashboard";
 import { ProfileEdit, ProfileList } from "./Profiles";
 import { Notice } from "../components/Field";
 import { SiteForm } from "../components/SiteForm";
 
-/** Admin panel. Phase 1 grows this (mapping profiles, preview, backfill). */
+/** Admin panel plus the dashboard. */
 export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promise<void> }) {
+  const wide = useLocation().pathname.startsWith("/dashboard");
   return (
     <div className="app">
       <header className="topbar">
-        <Link to="/admin/sites" className="brand">GrainTime</Link>
+        <Link to="/dashboard" className="brand">GrainTime</Link>
         <nav>
-          <Link to="/admin/sites">Sites</Link>
-          <Link to="/admin/profiles">Mapping profiles</Link>
-          <Link to="/admin/settings">Defaults</Link>
+          <NavLink to="/dashboard">Dashboard</NavLink>
+          <NavLink to="/admin/sites">Sites</NavLink>
+          <NavLink to="/admin/profiles">Mapping profiles</NavLink>
+          <NavLink to="/admin/settings">Defaults</NavLink>
         </nav>
         <span className="spacer" />
         <span className="muted">{user.display_name}</span>
         <button className="link" onClick={onLogout}>Sign out</button>
       </header>
-      <main className="content">
+      <main className={wide ? "content content-wide" : "content"}>
         <Routes>
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/admin/sites" element={<SiteList />} />
           <Route path="/admin/sites/new" element={<NewSite />} />
           <Route path="/admin/sites/:id" element={<SiteDetail />} />
           <Route path="/admin/settings" element={<SettingsPage />} />
           <Route path="/admin/profiles" element={<ProfileList />} />
           <Route path="/admin/profiles/:id" element={<ProfileEdit />} />
-          <Route path="*" element={<Navigate to="/admin/sites" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
     </div>

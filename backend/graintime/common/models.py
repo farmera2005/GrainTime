@@ -171,3 +171,17 @@ class SiteCollectorState(Base):
     rows_total: Mapped[int] = mapped_column(BigInteger, default=0)
     last_recheck_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     profile_fingerprint: Mapped[str | None] = mapped_column(String(64))
+
+
+class Dashboard(Base):
+    """A user's customizable dashboard: shared filters and an ordered widget list."""
+    __tablename__ = "dashboards"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(100))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    filters: Mapped[dict] = mapped_column(JSONB)
+    widgets: Mapped[list] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())

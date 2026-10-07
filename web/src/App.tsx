@@ -3,6 +3,7 @@ import { BrowserRouter } from "react-router-dom";
 import { api, SetupStatus } from "./api";
 import { Notice } from "./components/Field";
 import { AdminApp } from "./pages/Admin";
+import { DashboardPage } from "./pages/Dashboard";
 import { LoginPage } from "./pages/Login";
 import { SetupWizard } from "./pages/SetupWizard";
 
@@ -43,12 +44,14 @@ export function App() {
 
   if (status.user.role !== "admin") {
     return (
-      <div className="setup">
-        <main className="card">
-          <h2>Signed in as {status.user.display_name}</h2>
-          <p>The dashboards are not built yet. They arrive in a later phase.</p>
-          <button className="secondary" onClick={logout}>Sign out</button>
-        </main>
+      <div className="app">
+        <header className="topbar">
+          <span className="brand">GrainTime</span>
+          <span className="spacer" />
+          <span className="muted">{status.user.display_name}</span>
+          <button className="link" onClick={logout}>Sign out</button>
+        </header>
+        <main className="content content-wide"><DashboardPage /></main>
       </div>
     );
   }

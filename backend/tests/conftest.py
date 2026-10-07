@@ -55,7 +55,7 @@ def db_clean(migrated_db):
 
     from graintime.common.profiles import COMPUWEIGH_GMS
     with get_engine().begin() as c:
-        c.execute(text("TRUNCATE audit_log, collector_jobs, sessions, tickets, site_collector_state, "
+        c.execute(text("TRUNCATE dashboards, audit_log, collector_jobs, sessions, tickets, site_collector_state, "
                        "sites, mapping_profiles, users, app_settings RESTART IDENTITY CASCADE"))
         c.execute(text("INSERT INTO mapping_profiles (name, description, config) "
                        "VALUES ('CompuWeigh GMS', 'seeded', CAST(:cfg AS jsonb))"),
