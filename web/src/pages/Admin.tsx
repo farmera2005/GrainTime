@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { api, Site, User } from "../api";
 import { DefaultsForm } from "../components/DefaultsForm";
+import { DataCollection } from "../components/DataCollection";
 import { DiscoveryPanel } from "../components/Discovery";
+import { ago } from "../format";
+import { ProfileEdit, ProfileList } from "./Profiles";
 import { Notice } from "../components/Field";
 import { SiteForm } from "../components/SiteForm";
 
@@ -14,6 +17,7 @@ export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promi
         <Link to="/admin/sites" className="brand">GrainTime</Link>
         <nav>
           <Link to="/admin/sites">Sites</Link>
+          <Link to="/admin/profiles">Mapping profiles</Link>
           <Link to="/admin/settings">Defaults</Link>
         </nav>
         <span className="spacer" />
@@ -26,6 +30,8 @@ export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promi
           <Route path="/admin/sites/new" element={<NewSite />} />
           <Route path="/admin/sites/:id" element={<SiteDetail />} />
           <Route path="/admin/settings" element={<SettingsPage />} />
+          <Route path="/admin/profiles" element={<ProfileList />} />
+          <Route path="/admin/profiles/:id" element={<ProfileEdit />} />
           <Route path="*" element={<Navigate to="/admin/sites" replace />} />
         </Routes>
       </main>
@@ -63,8 +69,8 @@ function SiteList() {
           <table>
             <thead>
               <tr>
-                <th>Name</th><th>Code</th><th>Status</th><th>Server</th><th>Database</th>
-                <th>Dashboard</th><th>Public page</th><th></th>
+                <th>Name</th><th>Code</th><th>Status</th><th>Last poll</th><th>Trucks today</th>
+                <th>Server</th><th>Dashboard</th><th>Public page</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -73,8 +79,12 @@ function SiteList() {
                   <td><Link to={`/admin/sites/${s.id}`}>{s.name}</Link></td>
                   <td>{s.code}</td>
                   <td><StatusBadge site={s} /></td>
+                  <td title={s.last_error?.cause ?? ""}>
+                    {s.polling_enabled ? ago(s.last_success_at) : ""}
+                    {s.last_error ? <span className="field-error"> · {s.last_error.cause}</span> : null}
+                  </td>
+                  <td>{s.polling_enabled || s.trucks_today ? s.trucks_today : ""}</td>
                   <td>{s.host}:{s.port}</td>
-                  <td>{s.database}</td>
                   <td>{s.show_on_dashboard ? "Shown" : "Hidden"}</td>
                   <td>{s.show_on_public ? "Shown" : "Hidden"}</td>
                   <td><Link className="button secondary small-button" to={`/admin/sites/${s.id}`}>Edit</Link></td>
@@ -90,6 +100,7 @@ function SiteList() {
 
 function StatusBadge({ site }: { site: Site }) {
   if (site.archived) return <span className="badge badge-muted">Archived</span>;
+  if (site.polling_enabled && site.stale) return <span className="badge badge-bad">Stale</span>;
   if (site.polling_enabled) return <span className="badge badge-ok">Polling</span>;
   return <span className="badge badge-warn">Not polling</span>;
 }
@@ -151,6 +162,11 @@ function SiteDetail() {
       </section>
 
       <section className="card">
+        <h3>Data collection</h3>
+        <DataCollection site={site} onChange={setSite} />
+      </section>
+
+      <section className="card">
         <h3>Where this site appears</h3>
         <SiteSwitches site={site} onChange={setSite} />
       </section>
@@ -187,14 +203,6 @@ function SiteSwitches(props: { site: Site; onChange: (s: Site) => void }) {
   };
   return (
     <div className="switches">
-      <label className="check">
-        <input type="checkbox" checked={site.polling_enabled} disabled />
-        <span>
-          <strong>Polling</strong>: collect tickets from this site.
-          <span className="muted small"> Available once the site has a confirmed mapping profile, built from its
-          discovery report.</span>
-        </span>
-      </label>
       <label className="check">
         <input
           type="checkbox"

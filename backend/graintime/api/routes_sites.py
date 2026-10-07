@@ -8,18 +8,21 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from ..common import audit, crypto
-from ..common.models import CollectorJob, Site, User
+from ..common.models import CollectorJob, MappingProfile, Site, SiteCollectorState, Ticket, User
+from ..common import settings_store
+from ..common.normalize import SITE_TZ
 from .schemas import check_auth
-from .schemas import DiscoveryIn, SiteCreate, SiteDelete, SiteOut, SiteUpdate, TestConnectionIn
+from .schemas import (BackfillIn, DiscoveryIn, PreviewIn, SiteCreate, SiteDelete, SiteOut,
+                      SiteUpdate, TestConnectionIn)
 from .security import get_db, require_admin
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
@@ -28,6 +31,7 @@ router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
 AUDIT_FIELDS = ("name", "code", "address", "map_url", "host", "port", "instance_name",
                 "database_name", "auth_method", "domain", "username",
                 "encrypt", "trust_server_certificate", "polling_enabled", "show_on_dashboard",
+                "mapping_profile_id", "poll_interval_s",
                 "show_on_public")
 
 
@@ -39,7 +43,8 @@ def site_out(s: Site) -> SiteOut:
                    has_password=bool(s.password_encrypted), encrypt=s.encrypt,
                    trust_server_certificate=s.trust_server_certificate,
                    polling_enabled=s.polling_enabled, show_on_dashboard=s.show_on_dashboard,
-                   show_on_public=s.show_on_public, archived=s.archived_at is not None)
+                   show_on_public=s.show_on_public, archived=s.archived_at is not None,
+                   mapping_profile_id=s.mapping_profile_id, poll_interval_s=s.poll_interval_s)
 
 
 def _snapshot(s: Site) -> dict:
@@ -60,9 +65,46 @@ def _code_taken(db: DbSession, code: str, exclude_id: int | None = None) -> bool
     return db.scalar(q) is not None
 
 
+def local_day_start_utc(now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(SITE_TZ)
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def _interval(db: DbSession, site: Site) -> int:
+    return site.poll_interval_s or int(settings_store.get_globals(db)["poll_interval_s"])
+
+
+def is_stale(site: Site, state: SiteCollectorState | None, interval: int,
+             now: datetime | None = None) -> bool:
+    if not site.polling_enabled or site.archived_at is not None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if state is None or state.last_success_at is None:
+        return True
+    return (now - state.last_success_at).total_seconds() > max(3 * interval, 180)
+
+
 @router.get("/sites", response_model=list[SiteOut])
 def list_sites(db: DbSession = Depends(get_db)):
-    return [site_out(s) for s in db.scalars(select(Site).order_by(Site.name))]
+    sites = db.scalars(select(Site).order_by(Site.name)).all()
+    states = {st.site_id: st for st in db.scalars(select(SiteCollectorState))}
+    day0 = local_day_start_utc()
+    counts = dict(db.execute(
+        select(Ticket.site_id, func.count()).where(Ticket.inbound_at >= day0,
+                                                   Ticket.status != "voided")
+        .group_by(Ticket.site_id)).all())
+    default = int(settings_store.get_globals(db)["poll_interval_s"])
+    out = []
+    for s in sites:
+        o = site_out(s)
+        st = states.get(s.id)
+        o.last_success_at = st.last_success_at.isoformat() if st and st.last_success_at else None
+        o.last_error = st.last_error if st else None
+        o.stale = is_stale(s, st, s.poll_interval_s or default)
+        o.trucks_today = counts.get(s.id, 0)
+        out.append(o)
+    return out
 
 
 @router.post("/sites", response_model=SiteOut, status_code=201)
@@ -107,10 +149,18 @@ def update_site(site_id: int, body: SiteUpdate, db: DbSession = Depends(get_db),
         data["database_name"] = data.pop("database")
     if data.get("code") and _code_taken(db, data["code"], exclude_id=site.id):
         raise HTTPException(409, f"Short code {data['code']} is already used by another site.")
-    if data.get("polling_enabled") and not site.polling_enabled:
-        # Ticket polling needs a confirmed mapping profile, which no site has yet.
-        raise HTTPException(409, "Polling can be turned on once this site has a confirmed "
-                                 "mapping profile (built from its discovery report).")
+    if "mapping_profile_id" in data and data["mapping_profile_id"] is not None \
+            and db.get(MappingProfile, data["mapping_profile_id"]) is None:
+        raise HTTPException(422, "That mapping profile does not exist.")
+    profile_after = data["mapping_profile_id"] if "mapping_profile_id" in data else site.mapping_profile_id
+    polling_after = data.get("polling_enabled", site.polling_enabled)
+    if polling_after and profile_after is None:
+        if data.get("polling_enabled"):
+            raise HTTPException(409, "Choose a mapping profile for this site before turning "
+                                     "polling on.")
+        data["polling_enabled"] = False      # clearing the profile stops polling
+    if data.get("polling_enabled") and site.archived_at is not None:
+        raise HTTPException(409, "Restore this site before turning polling on.")
     if site.archived_at is not None and (data.get("show_on_dashboard") or data.get("show_on_public")):
         raise HTTPException(409, "Restore this site before showing it on the dashboard or "
                                  "public page.")
@@ -299,3 +349,77 @@ def discovery_json(job_id: int, db: DbSession = Depends(get_db)):
                     media_type="application/json",
                     headers={"Content-Disposition": f'attachment; filename="discovery-site'
                                                     f'{job.site_id}-job{job.id}.json"'})
+
+
+# --- ticket collection: preview, backfill, status ------------------------- #
+
+@router.post("/sites/{site_id}/preview", status_code=202)
+def queue_preview(site_id: int, body: PreviewIn, db: DbSession = Depends(get_db),
+                  user: User = Depends(require_admin)):
+    site = _get_site(db, site_id)
+    pid = body.profile_id or site.mapping_profile_id
+    if pid is None or db.get(MappingProfile, pid) is None:
+        raise HTTPException(409, "Choose a mapping profile first.")
+    job = CollectorJob(kind="preview", site_id=site_id, status="queued", requested_by=user.id,
+                       params={"options": {"profile_id": pid, "limit": body.limit}})
+    db.add(job)
+    db.commit()
+    return job_out(job)
+
+
+@router.post("/sites/{site_id}/backfill", status_code=202)
+def queue_backfill(site_id: int, body: BackfillIn, db: DbSession = Depends(get_db),
+                   user: User = Depends(require_admin)):
+    site = _get_site(db, site_id)
+    if site.mapping_profile_id is None:
+        raise HTTPException(409, "Choose a mapping profile for this site first.")
+    active = db.scalar(select(CollectorJob.id).where(
+        CollectorJob.site_id == site_id, CollectorJob.kind == "backfill",
+        CollectorJob.status.in_(("queued", "running"))))
+    if active:
+        raise HTTPException(409, "A backfill is already running for this site.")
+    opts = {"date_from": body.date_from.isoformat(), "date_to": body.date_to.isoformat()}
+    job = CollectorJob(kind="backfill", site_id=site_id, status="queued", requested_by=user.id,
+                       params={"options": opts})
+    db.add(job)
+    db.flush()
+    audit.record(db, actor_id=user.id, actor_name=user.username, action="site.backfill_started",
+                 entity_type="site", entity_id=site_id, new={"job_id": job.id, **opts})
+    db.commit()
+    return job_out(job)
+
+
+@router.get("/sites/{site_id}/collection")
+def collection_status(site_id: int, db: DbSession = Depends(get_db)):
+    site = _get_site(db, site_id)
+    st = db.get(SiteCollectorState, site_id)
+    interval = _interval(db, site)
+    day0 = local_day_start_utc()
+    total = db.scalar(select(func.count()).select_from(Ticket).where(Ticket.site_id == site_id))
+    today = db.scalar(select(func.count()).select_from(Ticket).where(
+        Ticket.site_id == site_id, Ticket.inbound_at >= day0, Ticket.status != "voided"))
+    open_now = db.scalar(select(func.count()).select_from(Ticket).where(
+        Ticket.site_id == site_id, Ticket.status == "open",
+        Ticket.inbound_at >= datetime.now(timezone.utc) - timedelta(hours=6)))
+    recent = db.scalars(select(Ticket).where(Ticket.site_id == site_id)
+                        .order_by(Ticket.inbound_at.desc().nulls_last()).limit(20)).all()
+    running = db.scalars(select(CollectorJob).where(
+        CollectorJob.site_id == site_id, CollectorJob.kind == "backfill")
+        .order_by(CollectorJob.id.desc()).limit(1)).first()
+    return {
+        "polling_enabled": site.polling_enabled,
+        "interval_s": interval,
+        "stale": is_stale(site, st, interval),
+        "state": None if st is None else {
+            "high_water_mark": st.high_water_mark, "last_poll_at": st.last_poll_at,
+            "last_success_at": st.last_success_at, "next_poll_at": st.next_poll_at,
+            "consecutive_failures": st.consecutive_failures, "last_error": st.last_error,
+            "rows_last_poll": st.rows_last_poll, "rows_total": st.rows_total,
+            "last_recheck_at": st.last_recheck_at},
+        "tickets": {"total": total, "today": today, "on_site_now": open_now},
+        "recent": [{"source_ticket_id": t.source_ticket_id, "ticket_number": t.ticket_number,
+                    "status": t.status, "commodity": t.commodity, "inbound_at": t.inbound_at,
+                    "outbound_at": t.outbound_at, "duration_s": t.duration_s,
+                    "single_weigh": t.single_weigh} for t in recent],
+        "last_backfill": job_out(running) if running else None,
+    }

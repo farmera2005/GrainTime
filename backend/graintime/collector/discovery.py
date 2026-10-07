@@ -245,10 +245,21 @@ def leading_index_columns(idx_rows, key):
             and not r["is_included_column"]}
 
 
+FREE_TEXT_MAX = 16
+
+
 def mask_value(col, v, enabled):
+    """Mask text that may identify a person, truck or farm. Columns named like
+    names/plates/addresses are always masked; in other columns, free text
+    (contains a space, or longer than a short code) is masked too, since names
+    such as 'SMITH FARMS KENWORTH' can sit in generically named columns.
+    Codes, statuses, types and descriptions are kept: the mapping needs them."""
     if not enabled or v is None or not isinstance(v, str):
         return v
-    if PII_COL_RE.search(col) and not NOT_PII_COL_RE.search(col):
+    safe_col = bool(NOT_PII_COL_RE.search(col))
+    if PII_COL_RE.search(col) and not safe_col:
+        return f"<masked len={len(v)}>"
+    if not safe_col and (" " in v.strip() or len(v) > FREE_TEXT_MAX):
         return f"<masked len={len(v)}>"
     return v
 

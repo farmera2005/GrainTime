@@ -84,6 +84,41 @@ services:
     restart: unless-stopped
     logging: *logging
 
+  # --- development only: `docker compose --profile mock up -d --build` ------------
+  # A mock CompuWeigh GMS site with live truck traffic. In GrainTime add a site
+  # with host mock-mssql, port 1433, database GMS, SQL login graintime,
+  # password Mock-Collector-2026!, Trust server certificate on.
+  mock-mssql:
+    profiles: ["mock"]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Express
+      MSSQL_SA_PASSWORD: "${MOCK_SA_PASSWORD:-Dev-Mock-Sa-2026!}"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+    logging: *logging
+
+  mock-gms:
+    profiles: ["mock"]
+    image: graintime-collector:latest
+    command: ["python", "-m", "graintime.devtools.mock_gms", "--days", "21", "--live"]
+    healthcheck:
+      disable: true
+    environment:
+      MOCK_SQL_HOST: mock-mssql
+      MOCK_SA_PASSWORD: "${MOCK_SA_PASSWORD:-Dev-Mock-Sa-2026!}"
+    depends_on:
+      mock-mssql: { condition: service_healthy }
+      collector: { condition: service_started }
+    restart: unless-stopped
+    logging: *logging
+
 volumes:
   pgdata:
   secrets:

@@ -1,8 +1,7 @@
-"""Collector service entry point: job loop plus a /health endpoint.
+"""Collector service entry point: admin jobs, scheduled site polling, /health.
 
-Ticket polling (Phase 1) joins this loop once the mapping profile is
-confirmed. Today the collector runs the jobs queued from the setup wizard and
-admin panel: test connection and discovery.
+Jobs (test connection, discovery, preview, backfill) are claimed every second;
+sites due for a poll are checked every 5 seconds.
 """
 
 from __future__ import annotations
@@ -15,10 +14,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..common.logging import get_logger, setup_logging
 from .jobs import JobRunner
+from .poller import Poller
 
 log = get_logger("collector")
 HEALTH_PORT = 8081
 LOOP_INTERVAL_S = 1.0
+POLL_CHECK_EVERY_S = 5.0
 STALE_LOOP_S = 30
 
 state = {"last_loop": 0.0, "db_ok": False, "started": time.time()}
@@ -52,6 +53,8 @@ def main() -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     runner = JobRunner()
+    poller = Poller(runner)
+    last_poll_check = 0.0
     backoff = 1.0
     recovered = False
     log.info("collector started")
@@ -61,6 +64,9 @@ def main() -> None:
                 runner.recover_interrupted()
                 recovered = True
             runner.tick()
+            if time.monotonic() - last_poll_check >= POLL_CHECK_EVERY_S:
+                last_poll_check = time.monotonic()
+                poller.tick()
             state["db_ok"] = True
             backoff = 1.0
             state["last_loop"] = time.time()
@@ -73,6 +79,7 @@ def main() -> None:
             backoff = min(backoff * 2, 30)
     log.info("collector stopping")
     runner.pool.shutdown(wait=False, cancel_futures=True)
+    poller.pool.shutdown(wait=False, cancel_futures=True)
     server.shutdown()
 
 

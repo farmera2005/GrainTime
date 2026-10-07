@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from datetime import date, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -203,6 +204,8 @@ class SiteUpdate(BaseModel):
     polling_enabled: bool | None = None
     show_on_dashboard: bool | None = None
     show_on_public: bool | None = None
+    mapping_profile_id: int | None = None          # null clears it (stops polling)
+    poll_interval_s: int | None = Field(default=None, ge=15, le=3600)   # null = global default
 
     @field_validator("code")
     @classmethod
@@ -245,6 +248,13 @@ class SiteOut(BaseModel):
     show_on_dashboard: bool
     show_on_public: bool
     archived: bool
+    mapping_profile_id: int | None = None
+    poll_interval_s: int | None = None
+    # Collection status at a glance (sites list)
+    last_success_at: str | None = None
+    last_error: dict | None = None
+    stale: bool = False
+    trucks_today: int = 0
 
 
 class SiteDelete(BaseModel):
@@ -262,6 +272,26 @@ class TestConnectionIn(BaseModel):
             raise ValueError("Give a saved site or connection details.")
         if self.site_id is None and not (self.connection and self.connection.password):
             raise ValueError("Enter the password to test an unsaved connection.")
+        return self
+
+
+class PreviewIn(BaseModel):
+    profile_id: int | None = None      # try a different profile than the site's
+    limit: int = Field(default=25, ge=1, le=100)
+
+
+class BackfillIn(BaseModel):
+    date_from: date
+    date_to: date
+
+    @model_validator(mode="after")
+    def _range(self):
+        if self.date_from > self.date_to:
+            raise ValueError("The start date must not be after the end date.")
+        if self.date_to > date.today() + timedelta(days=1):
+            raise ValueError("The end date is in the future.")
+        if (self.date_to - self.date_from).days > 3660:
+            raise ValueError("Backfill at most ten years at a time.")
         return self
 
 

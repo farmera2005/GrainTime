@@ -129,3 +129,19 @@ button.danger { background: var(--error-text); border-color: var(--error-text); 
 .checks td { border-bottom: none; padding: 2px 10px 2px 0; white-space: normal; }
 .check-ok { color: var(--accent); font-weight: 700; }
 .check-bad { color: var(--error-text); font-weight: 700; }
+.badge-bad { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
+.row-actions { display: flex; gap: 8px; align-items: center; }
+.radio-row { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.map-editor { margin: 6px 0 14px; }
+.map-editor table { width: auto; }
+.map-editor td { white-space: normal; }
+.map-editor select, .map-editor input { font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+pre.script { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 0.8rem; }
+.collection h4 { margin-top: 22px; }
+.collection select { font: inherit; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+.stat { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
+.stat-bad { border-color: var(--error-border); background: var(--error-bg); }
+.stat-label { font-size: 0.8rem; color: var(--muted); }
+.stat-value { font-size: 1.35rem; font-weight: 700; }
+.stat-wide { grid-column: 1 / -1; }

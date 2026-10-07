@@ -32,6 +32,16 @@ elevators. See README.md for install, services and deployment notes.
   use python-tds with NTLM via pyspnego (`sitedb._connect_windows`), because
   ODBC on Linux only does Kerberos. Both go through `sitedb.connect`, which
   applies the same session settings and timeouts.
+- Ticket collection: mapping profiles (`common/profiles.py`, structured, no SQL)
+  -> `collector/mapping.py` builds bounded SELECTs -> `common/normalize.py`
+  (pure; UTC, DST, statuses, single-weigh, split tickets) ->
+  `common/tickets_store.py` (idempotent upsert on site + source ticket).
+  `collector/poller.py` schedules polls (high-water mark, look-back, nightly
+  re-check, back-off, stale); `collector/collect.py` also runs Preview and
+  backfill jobs. The poller and jobs share the one-connection-per-site lock.
+- `common/login_script.py` generates the site login with column-level SELECT
+  from a profile. `devtools/mock_gms.py` is a dev-only CompuWeigh GMS mock
+  (compose profile `mock`) that uses that script.
 - Code: `backend/graintime/{common,api,collector}`, `backend/migrations`,
   `web/src`. The setup wizard and the admin panel share `SiteForm`,
   `DiscoveryPanel` and `DefaultsForm`, so the first site is registered through
@@ -88,6 +98,8 @@ elevators. See README.md for install, services and deployment notes.
 docker compose up -d --build                 # full stack, then open :8080
 cd backend && TEST_DATABASE_URL=postgresql+psycopg://u:p@host:5432/graintime_test pytest
 # optional SQL Server integration test: MSSQL_TEST_HOST/PORT/DATABASE/USER/PASSWORD
+# optional mock GMS end-to-end test: GMS_TEST_HOST, GMS_TEST_SA_PASSWORD
+docker compose --profile mock up -d --build  # dev stack with a mock CompuWeigh GMS site
 cd web && npm run build                      # typecheck + build; commit web/dist
 ```
 

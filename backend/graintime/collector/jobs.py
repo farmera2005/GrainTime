@@ -20,7 +20,9 @@ from ..common import crypto
 from ..common.db import get_sessionmaker
 from ..common.logging import get_logger
 from ..common.models import CollectorJob, Site
-from . import discovery, sitedb
+from ..common.models import MappingProfile
+from ..common.profiles import ProfileConfig
+from . import collect, discovery, sitedb
 
 log = get_logger("collector.jobs")
 
@@ -37,6 +39,15 @@ def job_key(job: CollectorJob) -> str:
         return f"site:{job.site_id}"
     c = job.params.get("connection") or {}
     return f"conn:{c.get('host')}:{c.get('port') or c.get('instance_name')}/{c.get('database')}"
+
+
+def spec_from_site(site: Site) -> sitedb.ConnectionSpec:
+    return sitedb.ConnectionSpec(
+        host=site.host, port=site.port, instance_name=site.instance_name,
+        auth_method=site.auth_method, domain=site.domain,
+        database=site.database_name, username=site.username,
+        password=crypto.decrypt(site.password_encrypted), encrypt=site.encrypt,
+        trust_server_certificate=site.trust_server_certificate)
 
 
 def spec_for_job(db, job: CollectorJob) -> tuple[sitedb.ConnectionSpec, str]:
@@ -59,12 +70,7 @@ def spec_for_job(db, job: CollectorJob) -> tuple[sitedb.ConnectionSpec, str]:
             username=conn["username"], password=password, encrypt=conn.get("encrypt", "yes"),
             trust_server_certificate=bool(conn.get("trust_server_certificate")))
     elif site is not None:
-        spec = sitedb.ConnectionSpec(
-            host=site.host, port=site.port, instance_name=site.instance_name,
-            auth_method=site.auth_method, domain=site.domain,
-            database=site.database_name, username=site.username,
-            password=crypto.decrypt(site.password_encrypted), encrypt=site.encrypt,
-            trust_server_certificate=site.trust_server_certificate)
+        spec = spec_from_site(site)
     else:
         raise ValueError("job has neither a site nor connection details")
     where = spec.host + (f"\\{spec.instance_name}" if spec.instance_name else "")
@@ -133,6 +139,8 @@ class JobRunner:
     def _run_guarded(self, job_id: int, key: str) -> None:
         try:
             self.run(job_id)
+        except collect.MappingError as exc:
+            self._finish(job_id, "failed", error=exc.as_dict())
         except Exception:
             log.exception("job crashed", extra={"job_id": job_id})
             self._finish(job_id, "failed", error={"code": "internal", "cause": "Internal error "
@@ -170,6 +178,11 @@ class JobRunner:
                 self._finish(job_id, "succeeded", result=info)
             elif kind == "discovery":
                 self._run_discovery(job_id, conn, target, options)
+            elif kind == "preview":
+                self._finish(job_id, "succeeded",
+                             result=collect.preview(conn, self._profile_for(job_id), options))
+            elif kind == "backfill":
+                self._run_backfill(job_id, conn, options)
             else:
                 self._finish(job_id, "failed", error={"code": "unknown_kind",
                              "cause": f"Unknown job kind {kind!r}", "fix": ""})
@@ -214,6 +227,49 @@ class JobRunner:
                               ("product_version", "edition", "product_level")},
                    "tls": rep.get("tls_assessment")}
         self._finish(job_id, "succeeded", result={"summary": summary, "report": rep, "markdown": md})
+
+    def _profile_for(self, job_id: int) -> ProfileConfig:
+        """The profile named in the job (Preview can try any profile), else the site's."""
+        with self.Session() as db:
+            job = db.get(CollectorJob, job_id)
+            pid = (job.params.get("options") or {}).get("profile_id")
+            if pid is None:
+                site = db.get(Site, job.site_id)
+                pid = site.mapping_profile_id if site else None
+            prof = db.get(MappingProfile, pid) if pid is not None else None
+            if prof is None:
+                raise collect.MappingError("no_profile", "This site has no mapping profile",
+                                           "Choose a mapping profile for the site first.")
+            return ProfileConfig(**prof.config)
+
+    def _cancel_checker(self, job_id: int):
+        last = [0.0, False]
+
+        def should_cancel():
+            now = time.monotonic()
+            if now - last[0] >= CANCEL_CHECK_INTERVAL_S:
+                last[0] = now
+                with self.Session() as db:
+                    last[1] = bool(db.scalar(select(CollectorJob.cancel_requested)
+                                             .where(CollectorJob.id == job_id)))
+            return last[1]
+        return should_cancel
+
+    def _run_backfill(self, job_id: int, conn, options: dict) -> None:
+        with self.Session() as db:
+            site_id = db.get(CollectorJob, job_id).site_id
+        profile = self._profile_for(job_id)
+        should_cancel = self._cancel_checker(job_id)
+
+        def progress(p):
+            with self.Session() as db:
+                db.execute(update(CollectorJob).where(CollectorJob.id == job_id).values(progress=p))
+                db.commit()
+
+        summary = collect.backfill(conn, profile, site_id, options, progress, should_cancel,
+                                   self.Session)
+        self._finish(job_id, "cancelled" if summary.get("cancelled") else "succeeded",
+                     result=summary)
 
     def _finish(self, job_id, status, result=None, error=None) -> None:
         with self.Session() as db:

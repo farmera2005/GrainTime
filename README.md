@@ -4,9 +4,9 @@ Truck time on site (inbound weigh to outbound weigh) for Mercer Landmark grain
 elevators: scale house wall displays, a management dashboard, and a public
 farmer page.
 
-**Status:** first-run setup, site management, Test connection and Discovery
-are in place. Ticket polling starts once the discovery report has been
-reviewed and the mapping profile confirmed.
+**Status:** Phase 1. Setup, site management, Test connection, Discovery,
+mapping profiles, Preview data, backfill and live ticket collection are in
+place. The wall display, dashboards and public page come next.
 
 ## Install and first run
 
@@ -69,6 +69,59 @@ A site's page lets you:
   name.
 
 Every change is recorded in the audit log.
+
+### Collecting tickets from a site (admin guide)
+
+1. **Prepare the site's SQL Server** (see the deployment notes below): TCP/IP
+   on, a static port (or the SQL Server Browser running), and a firewall rule
+   for the Docker host.
+2. **Create GrainTime's read-only login.** Mapping profiles → open the profile
+   → *Read-only login script*. Enter the database name and run the script at
+   the site in SSMS as a sysadmin. It grants `SELECT` on only the columns the
+   profile reads, so GrainTime cannot read customer, driver, plate, weight or
+   price columns.
+3. **Add the site** (Sites → Add site) with that login, and click **Test
+   connection**.
+4. On the site's page, under **Data collection**, choose the **mapping
+   profile** and click **Preview data**. Check that types, statuses,
+   commodities, weigh times and times on site look right. Preview also lists
+   example tickets for status values treated as voided, so you can look them
+   up in CompuWeigh.
+5. **Backfill history**: pick a date range and run it. It loads one day at a
+   time with pauses, shows progress, can be cancelled, and is safe to repeat.
+6. Turn **Polling** on. The first poll starts within seconds; then every poll
+   interval (default 60 s, per-site override).
+
+How polling works: each poll reads new tickets after the high-water mark
+(`tid_pk` for CompuWeigh GMS), re-reads tickets created in the last 24 h and
+completed in the last 2 h (to catch completions, edits and voids), and once a
+night re-checks the last 7 days. Every query is a bounded, read-only `SELECT`
+at `READ UNCOMMITTED`. An unreachable site backs off (up to 30 minutes), is
+marked **Stale** in the Sites list, and catches up from the high-water mark
+when it returns. Other sites are never affected.
+
+### Mapping profiles
+
+A mapping profile says where tickets and weigh times live in a scale
+database: tables, columns and value translations, never free-form SQL.
+GrainTime builds every query from it. Sites on the same CompuWeigh version
+share a profile; profiles can be created, cloned and edited in the browser,
+and saving a profile that sites use asks for confirmation.
+
+The **CompuWeigh GMS** profile (from the first site's discovery):
+
+| GrainTime | CompuWeigh GMS |
+|---|---|
+| Ticket | `dbo.TransactionID` (`tid_pk`; printed number `tid_ticket`) |
+| Inbound / outbound weigh | First / last finished weigh step in `dbo.TransactionLog` (`tlg_FinishTime`, `tlg_status = 1`, `tlg_WeightType` set) |
+| Single weigh (stored tare) | Only one kind of weight (gross or tare) recorded: excluded and counted |
+| Status | `tid_status`: 0 open, 1 completed, 2 and 4 voided (to be confirmed) |
+| Type, direction | `tid_trtfk` → `dbo.TransactionType` (`trt_code`, `trt_direction` 1 received / 2 shipped). Only `TRUCKIN` is tracked |
+| Commodity | `tid_prdfk` → `dbo.Product.prd_description` |
+| Split tickets | `tid_parenttidfk`: a linked ticket for a split counts once, merged into its truck |
+
+Times are converted from US Eastern local time to UTC; in the fall-back hour
+the interpretation giving the shortest non-negative stay is used.
 
 ### What happens automatically on first start
 
@@ -325,6 +378,14 @@ This is a collector image packaging fault, not a site problem. Rebuild with
 cd backend
 pip install -r requirements-dev.txt
 TEST_DATABASE_URL=postgresql+psycopg://user:pw@127.0.0.1:5432/graintime_test pytest
+
+# integration tests: MSSQL_TEST_* (any SQL Server), GMS_TEST_HOST + GMS_TEST_SA_PASSWORD
+# (a SQL Server seeded by graintime.devtools.mock_gms)
+
+# a mock CompuWeigh GMS site with live truck traffic (development only)
+docker compose --profile mock up -d --build
+# then add a site: host mock-mssql, port 1433, database GMS, SQL login graintime,
+# password Mock-Collector-2026!, trust server certificate on
 
 # frontend
 cd web && npm install && npm run build      # or: npm run dev (proxies /api to :8000)

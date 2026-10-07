@@ -66,6 +66,12 @@ export type Site = {
   show_on_dashboard: boolean;
   show_on_public: boolean;
   archived: boolean;
+  mapping_profile_id: number | null;
+  poll_interval_s: number | null;
+  last_success_at: string | null;
+  last_error: JobError | null;
+  stale: boolean;
+  trucks_today: number;
 };
 
 export type SiteInput = Omit<ConnectionFields, "password"> & {
@@ -76,7 +82,106 @@ export type SiteInput = Omit<ConnectionFields, "password"> & {
   password?: string;
 };
 
-export type SiteSwitches = { polling_enabled: boolean; show_on_dashboard: boolean; show_on_public: boolean };
+export type SiteSwitches = {
+  polling_enabled: boolean;
+  show_on_dashboard: boolean;
+  show_on_public: boolean;
+  mapping_profile_id: number | null;
+  poll_interval_s: number | null;
+};
+
+export type Lookup = {
+  table: string;
+  key_column: string;
+  code_column: string;
+  description_column?: string | null;
+  direction_column?: string | null;
+};
+
+export type WeighSteps = {
+  table: string;
+  ticket_fk_column: string;
+  time_column: string;
+  weight_type_column: string;
+  status_column?: string | null;
+  status_done_value?: string | null;
+};
+
+export type TicketStatus = "open" | "completed" | "voided";
+
+export type ProfileConfig = {
+  ticket_table: string;
+  id_column: string;
+  high_water_column: string;
+  ticket_number_column?: string | null;
+  status_column: string;
+  status_map: Record<string, TicketStatus>;
+  void_column?: string | null;
+  created_column: string;
+  completed_column?: string | null;
+  type_column?: string | null;
+  product_column?: string | null;
+  parent_column?: string | null;
+  inbound_column?: string | null;
+  outbound_column?: string | null;
+  weigh_steps?: WeighSteps | null;
+  type_lookup?: Lookup | null;
+  direction_map: Record<string, "received" | "shipped">;
+  included_type_codes: string[];
+  product_lookup?: Lookup | null;
+  filter_column?: string | null;
+  filter_value?: string | null;
+  lookback_hours: number;
+  completed_lookback_hours: number;
+  nightly_recheck_days: number;
+};
+
+export type MappingProfile = {
+  id: number;
+  name: string;
+  description: string | null;
+  config: ProfileConfig;
+  sites: { id: number; name: string; polling_enabled: boolean }[];
+  updated_at: string;
+};
+
+export type NormalizedTicket = {
+  source_ticket_id: string;
+  ticket_number: string | null;
+  raw_status: string;
+  status: string;
+  direction: string;
+  transaction_type: string | null;
+  commodity: string | null;
+  inbound_at: string | null;
+  outbound_at: string | null;
+  duration_s: number | null;
+  single_weigh: boolean;
+  source_created_at: string | null;
+  included: boolean;
+  note: string | null;
+};
+
+export type CollectionStatus = {
+  polling_enabled: boolean;
+  interval_s: number;
+  stale: boolean;
+  state: null | {
+    high_water_mark: string | null;
+    last_poll_at: string | null;
+    last_success_at: string | null;
+    next_poll_at: string | null;
+    consecutive_failures: number;
+    last_error: (JobError & { at?: string }) | null;
+    rows_last_poll: number;
+    rows_total: number;
+    last_recheck_at: string | null;
+  };
+  tickets: { total: number; today: number; on_site_now: number };
+  recent: Pick<NormalizedTicket, "source_ticket_id" | "ticket_number" | "status" | "commodity" |
+    "inbound_at" | "outbound_at" | "duration_s" | "single_weigh">[];
+  last_backfill: Job | null;
+};
 
 export type SqlInstance = { server: string | null; instance: string; version: string | null; tcp_port: number | null };
 
@@ -92,10 +197,10 @@ export type JobError = {
 
 export type Job = {
   id: number;
-  kind: "test_connection" | "discovery";
+  kind: "test_connection" | "discovery" | "preview" | "backfill";
   site_id: number | null;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  progress: { step: string; done: number; total: number } | null;
+  progress: { step: string; done: number; total: number; tickets_stored?: number } | null;
   error: JobError | null;
   result: Record<string, any> | null;
   created_at: string;
@@ -176,5 +281,26 @@ export const api = {
     request<Job[]>("GET", `/api/admin/sites/${siteId}/jobs${kind ? `?kind=${kind}` : ""}`),
   getJob: (id: number) => request<Job>("GET", `/api/admin/jobs/${id}`),
   cancelJob: (id: number) => request<Job>("POST", `/api/admin/jobs/${id}/cancel`),
+  listProfiles: () => request<MappingProfile[]>("GET", "/api/admin/mapping-profiles"),
+  getProfile: (id: number) => request<MappingProfile>("GET", `/api/admin/mapping-profiles/${id}`),
+  profileTemplate: () => request<{ config: ProfileConfig }>("GET", "/api/admin/mapping-profiles/template"),
+  createProfile: (b: { name: string; description: string | null; config: ProfileConfig }) =>
+    request<MappingProfile>("POST", "/api/admin/mapping-profiles", b),
+  updateProfile: (id: number, b: { name: string; description: string | null; config: ProfileConfig; confirm_in_use?: boolean }) =>
+    request<MappingProfile>("PUT", `/api/admin/mapping-profiles/${id}`, b),
+  cloneProfile: (id: number) => request<MappingProfile>("POST", `/api/admin/mapping-profiles/${id}/clone`, {}),
+  deleteProfile: (id: number) => request<{ deleted: boolean }>("DELETE", `/api/admin/mapping-profiles/${id}`),
+  loginScript: async (id: number, database: string, login: string, windows: boolean) => {
+    const q = new URLSearchParams({ database, login, windows: String(windows) });
+    const res = await fetch(`/api/admin/mapping-profiles/${id}/login-script?${q}`, { credentials: "same-origin" });
+    const text = await res.text();
+    if (!res.ok) throw new ApiError(res.status, safeJson(text)?.detail || "Could not create the script");
+    return text;
+  },
+  startPreview: (siteId: number, b: { profile_id?: number; limit?: number }) =>
+    request<Job>("POST", `/api/admin/sites/${siteId}/preview`, b),
+  startBackfill: (siteId: number, b: { date_from: string; date_to: string }) =>
+    request<Job>("POST", `/api/admin/sites/${siteId}/backfill`, b),
+  collection: (siteId: number) => request<CollectionStatus>("GET", `/api/admin/sites/${siteId}/collection`),
   reportJson: (id: number) => request<Record<string, any>>("GET", `/api/admin/jobs/${id}/report.json`),
 };
