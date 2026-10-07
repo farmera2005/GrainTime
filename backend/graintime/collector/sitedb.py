@@ -296,8 +296,10 @@ def _network_checks(host: str, port: int | None, ip: str | None) -> tuple[list[d
     checks = [{"check": "Address", "result": f"{host} → {ip}" if ip and ip != host else (ip or host),
                "ok": ip is not None}]
     if ip:
-        checks.append({"check": "GrainTime collector's address", "result": _source_address(ip) or "?",
-                       "ok": True})
+        src = _source_address(ip)
+        checks.append({"check": "GrainTime collector's address (inside Docker)",
+                       "result": f"{src or '?'}; the site sees the Docker host's own network "
+                                 "address instead", "ok": True})
     checks.append({"check": f"SQL Server (TCP {port})", "result": "no answer", "ok": False})
     checks.append({"check": "SQL Server Browser (UDP 1434)", "result": "no answer", "ok": False})
     with ThreadPoolExecutor(max_workers=len(REACHABILITY_PORTS)) as pool:
@@ -353,14 +355,17 @@ def diagnose(spec: ConnectionSpec, exc: SiteConnectionError) -> SiteConnectionEr
             "sql_port_blocked",
             f"The server {where} is reachable, but SQL Server did not answer on TCP port "
             f"{spec.port}",
-            "Usually one of two things. (1) Windows Firewall on the SQL Server machine itself is "
-            "blocking the port. It is on by default even where the network has no firewall, and "
-            "programs running on that same PC (such as CompuWeigh) are never blocked, so they "
-            f"still connect. Add an inbound rule there allowing TCP {spec.port} (and UDP 1434 to "
-            "look up instance names). (2) SQL Server is not on that port: a named instance "
-            "(SERVER\\SQLEXPRESS) normally uses a different, dynamic port. Enter the instance "
-            "name and leave the port blank, or read the port in SQL Server Configuration Manager "
-            "> Protocols > TCP/IP > IP Addresses > IPAll. Also check TCP/IP is enabled there.",
+            f"Port {spec.port} was silently dropped, not refused: a firewall on that machine is "
+            "filtering it (a Windows PC without one refuses an unused port instantly). Almost "
+            "always this is Windows Firewall on the SQL Server PC itself, which is on by default "
+            "even where the network has no firewall and never blocks programs on that same PC "
+            "(such as CompuWeigh), so they still connect. On that PC: (1) find SQL Server's port "
+            "in SQL Server Configuration Manager > Protocols > TCP/IP > IP Addresses > IPAll "
+            "(TCP Port, or TCP Dynamic Ports for a named instance) and enter it here; "
+            "(2) add a Windows Firewall inbound rule allowing TCP on that port from the Docker "
+            "host's own IP address (not the 172.x Docker address listed below). To use the "
+            "instance name instead of a port, also allow UDP 1434 and run the SQL Server Browser "
+            "service.",
             exc.detail, checks=checks)
     hint = ""
     if ip and any(ipaddress.ip_address(ip) in n for n in DOCKER_DEFAULT_POOLS):

@@ -197,7 +197,9 @@ def test_machine_answers_but_sql_port_silent(fake, monkeypatch):
     err = e.value.as_dict()
     assert err["code"] == "sql_port_blocked"
     assert "reachable" in err["cause"] and "TCP port 1433" in err["cause"]
-    assert "Windows Firewall on the SQL Server machine" in err["fix"]
+    assert "silently dropped, not refused" in err["fix"] and "Windows Firewall" in err["fix"]
+    assert "Docker host's own IP address" in err["fix"]
+    assert any("inside Docker" in c["check"] for c in err["checks"])
     labels = {c["check"]: c for c in err["checks"]}
     assert labels["Windows file sharing (TCP 445)"]["ok"] is True
     assert labels["SQL Server (TCP 1433)"]["ok"] is False
