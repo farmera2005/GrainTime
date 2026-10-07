@@ -6,8 +6,8 @@ farmer page.
 
 **Status:** Phase 1. Setup, site management, Test connection, Discovery,
 mapping profiles, Preview data, backfill, live ticket collection and the
-customizable statistics dashboard are in place. The wall display and public
-page come next.
+customizable statistics dashboard and the public wait-times page are in
+place. The wall display comes next.
 
 ## Install and first run
 
@@ -125,6 +125,43 @@ automatically.
   weigh, over the ceiling).
 
 Admins choose which sites appear with **Show on dashboard** on the site page.
+
+### The public wait-times page
+
+A mobile-first page for farmers, with no sign-in: every site that has
+**Public page** switched on, with its current time on site, trucks on site now,
+open or closed (from the site's **Operating hours**), and when the data was
+last updated. The same data is served as a JSON feed (`feed.json`) for the
+website or member portal.
+
+- **Preview it** at `http://<this-host>:8080/public/` (also linked as
+  *Public page* in the top menu). The public service itself listens on the
+  Docker host's `127.0.0.1:8081` only (`PUBLIC_PORT` to change it).
+  **Nothing is exposed to the internet**: publishing it (reverse proxy,
+  tunnel or similar) is a separate decision.
+- **Isolated by design.** It runs in its own container, built from only
+  `graintime/public` (no api or collector code), on a network shared only
+  with the database and the internal web server. It logs in as
+  `graintime_public`, a role that can `SELECT` one table,
+  `public_site_status`, and nothing else; its password is generated into a
+  separate volume, the only secret it can see. It cannot reach the api, the
+  collector or any site database.
+- **Aggregates only.** The collector recomputes `public_site_status` every
+  30 s: no ticket numbers, no individual trucks, no customers. Received grain
+  only.
+- **Honest numbers.** With fewer recent trucks than the *public minimum
+  trucks* setting (default 3), the page says *Light traffic* or *No recent
+  trucks* instead of a number. When a site's data is older than the *public
+  staleness* setting (default 15 min), it says *Data delayed* and hides the
+  numbers. Both limits are under Defaults.
+- Cached (15 s in the service, 30 s for browsers), rate limited per client
+  (60 requests a minute), GET only, with strict security headers.
+  `X-Forwarded-For` is trusted only from private-network peers such as your
+  reverse proxy.
+
+**Operating hours** (site page → Operating hours): regular hours per weekday,
+plus date-range overrides such as harvest hours. Without hours the page shows
+wait times but not open or closed.
 
 ### Mapping profiles
 

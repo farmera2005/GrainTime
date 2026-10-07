@@ -68,6 +68,7 @@ export type Site = {
   archived: boolean;
   mapping_profile_id: number | null;
   poll_interval_s: number | null;
+  hours: Hours | null;
   last_success_at: string | null;
   last_error: JobError | null;
   stale: boolean;
@@ -82,12 +83,19 @@ export type SiteInput = Omit<ConnectionFields, "password"> & {
   password?: string;
 };
 
+export type DayHours = { open: string; close: string };
+export type Hours = {
+  weekly: (DayHours | null)[];
+  overrides: { label: string; date_from: string; date_to: string; weekly: (DayHours | null)[] }[];
+};
+
 export type SiteSwitches = {
   polling_enabled: boolean;
   show_on_dashboard: boolean;
   show_on_public: boolean;
   mapping_profile_id: number | null;
   poll_interval_s: number | null;
+  hours: Hours | null;
 };
 
 export type Lookup = {

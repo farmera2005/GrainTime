@@ -6,8 +6,17 @@ elevators. See README.md for install, services and deployment notes.
 ## Architecture (Docker Compose)
 
 - `init` (one-shot) generates `db_password` and `encryption_key` into the
-  `secrets` volume. `migrate` (one-shot) runs Alembic. Then `api`, `collector`,
-  `web`, plus `db` (PostgreSQL).
+  `secrets` volume, and `public_db_password` into the separate
+  `public-secrets` volume. `migrate` (one-shot) runs Alembic, then
+  `common/public_role.py` enables the `graintime_public` login. Then `api`,
+  `collector`, `web`, `public`, plus `db` (PostgreSQL).
+- **The `public` service is isolated; keep it that way.** Its image holds only
+  `graintime/public` (imports nothing else from GrainTime), it sits on the
+  `public` network with only `db` and `web`, mounts only `public-secrets`,
+  and its role may SELECT only `public_site_status` (aggregates written by
+  `common/publish.py` from the collector every 30 s; never ticket-level
+  columns). Its host port binds 127.0.0.1; staff preview it through `web` at
+  `/public/`. Don't expose it to the internet without the user deciding how.
 - **Zero manual configuration.** Nothing is entered by CLI or config file.
   Sites, users, settings and the first admin come from the browser (setup
   wizard, then the admin panel). Env vars are optional overrides only

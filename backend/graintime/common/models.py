@@ -87,6 +87,8 @@ class Site(Base):
     polling_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     show_on_dashboard: Mapped[bool] = mapped_column(Boolean, default=True)
     show_on_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Operating hours (see common/hours.py); NULL = not set, open state unknown.
+    hours: Mapped[dict | None] = mapped_column(JSONB)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
@@ -185,3 +187,26 @@ class Dashboard(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                  onupdate=func.now())
+
+
+class PublicSiteStatus(Base):
+    """Precomputed aggregates for the public page, one row per public site.
+
+    Written by the collector's publisher; the only table the `graintime_public`
+    database role can read. Holds nothing ticket-level.
+    """
+    __tablename__ = "public_site_status"
+    code: Mapped[str] = mapped_column(String(20), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    name: Mapped[str] = mapped_column(String(200))
+    address: Mapped[str | None] = mapped_column(Text)
+    map_url: Mapped[str | None] = mapped_column(Text)
+    open_state: Mapped[bool | None] = mapped_column(Boolean)
+    hours_text: Mapped[str | None] = mapped_column(String(80))
+    traffic: Mapped[str] = mapped_column(String(10))        # ok | light | none
+    minutes: Mapped[int | None] = mapped_column(Integer)    # only when traffic = ok
+    level: Mapped[str | None] = mapped_column(String(10))   # good | warning | critical
+    trucks_on_site: Mapped[int] = mapped_column(Integer, default=0)
+    data_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    stale_after_min: Mapped[int] = mapped_column(Integer)

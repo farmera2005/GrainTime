@@ -1,0 +1,4 @@
+# The public service only: no SQLAlchemy, no crypto, no ODBC.
+fastapi==0.142.2
+uvicorn[standard]==0.53.0
+psycopg[binary]==3.3.6

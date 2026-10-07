@@ -10,6 +10,10 @@ untouched, so it is safe to run on every start. Nobody types these values:
 Losing encryption_key does not lose any data, but every site password then
 has to be re-entered in the admin panel. Back up the secrets volume along with
 the database volume.
+
+A separate public-secrets volume holds only public_db_password, the login of
+the read-only role the public service uses. It is the only secret mounted into
+the public container.
 """
 
 from __future__ import annotations
@@ -29,10 +33,10 @@ GENERATORS = {
 }
 
 
-def ensure_secrets(directory=SECRETS_DIR) -> list[str]:
+def ensure_secrets(directory=SECRETS_DIR, generators=None) -> list[str]:
     os.makedirs(directory, mode=0o755, exist_ok=True)
     created = []
-    for name, gen in GENERATORS.items():
+    for name, gen in (generators or GENERATORS).items():
         path = os.path.join(directory, name)
         if os.path.exists(path) and os.path.getsize(path) > 0:
             continue
@@ -45,10 +49,16 @@ def ensure_secrets(directory=SECRETS_DIR) -> list[str]:
     return created
 
 
+PUBLIC_SECRETS_DIR = os.environ.get("GRAINTIME_PUBLIC_SECRETS_DIR", "/run/graintime-public-secrets")
+PUBLIC_GENERATORS = {"public_db_password": lambda: secrets.token_urlsafe(32)}
+
+
 def main() -> int:
     setup_logging("init")
     log = get_logger("init")
     created = ensure_secrets()
+    if os.path.isdir(PUBLIC_SECRETS_DIR):
+        created += ensure_secrets(PUBLIC_SECRETS_DIR, PUBLIC_GENERATORS)
     if created:
         log.info("generated secrets", extra={"generated": created})
     else:

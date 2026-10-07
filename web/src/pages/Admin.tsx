@@ -9,6 +9,7 @@ import { DashboardPage } from "./Dashboard";
 import { ProfileEdit, ProfileList } from "./Profiles";
 import { Notice } from "../components/Field";
 import { SiteForm } from "../components/SiteForm";
+import { HoursEditor } from "../components/HoursEditor";
 
 /** Admin panel plus the dashboard. */
 export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promise<void> }) {
@@ -22,6 +23,7 @@ export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promi
           <NavLink to="/admin/sites">Sites</NavLink>
           <NavLink to="/admin/profiles">Mapping profiles</NavLink>
           <NavLink to="/admin/settings">Defaults</NavLink>
+          <a href="/public/" target="_blank" rel="noopener">Public page ↗</a>
         </nav>
         <span className="spacer" />
         <span className="muted">{user.display_name}</span>
@@ -176,6 +178,11 @@ function SiteDetail() {
       </section>
 
       <section className="card">
+        <h3>Operating hours</h3>
+        <HoursEditor key={`${site.id}-hours`} site={site} onChange={setSite} />
+      </section>
+
+      <section className="card">
         <h3>Discovery</h3>
         <DiscoveryPanel siteId={site.id} />
       </section>
@@ -225,6 +232,13 @@ function SiteSwitches(props: { site: Site; onChange: (s: Site) => void }) {
         />
         <span><strong>Public page</strong>: show this site's wait times to farmers. New sites start hidden.</span>
       </label>
+      {site.show_on_public ? (
+        <p className="small muted">
+          Shown on the <a href="/public/" target="_blank" rel="noopener">public page</a> within a minute. It lists the
+          current time on site (only when enough trucks back it), trucks on site now, open or closed, and when the data
+          was last updated. Nothing about individual trucks or customers.
+        </p>
+      ) : null}
       <p className={`small ${note?.kind === "error" ? "field-error" : "muted"}`} role="status">{note?.text ?? "\u00a0"}</p>
     </div>
   );

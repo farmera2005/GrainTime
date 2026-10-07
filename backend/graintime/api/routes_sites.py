@@ -32,7 +32,7 @@ AUDIT_FIELDS = ("name", "code", "address", "map_url", "host", "port", "instance_
                 "database_name", "auth_method", "domain", "username",
                 "encrypt", "trust_server_certificate", "polling_enabled", "show_on_dashboard",
                 "mapping_profile_id", "poll_interval_s",
-                "show_on_public")
+                "show_on_public", "hours")
 
 
 def site_out(s: Site) -> SiteOut:
@@ -44,6 +44,7 @@ def site_out(s: Site) -> SiteOut:
                    trust_server_certificate=s.trust_server_certificate,
                    polling_enabled=s.polling_enabled, show_on_dashboard=s.show_on_dashboard,
                    show_on_public=s.show_on_public, archived=s.archived_at is not None,
+                   hours=s.hours,
                    mapping_profile_id=s.mapping_profile_id, poll_interval_s=s.poll_interval_s)
 
 
@@ -164,6 +165,8 @@ def update_site(site_id: int, body: SiteUpdate, db: DbSession = Depends(get_db),
     if site.archived_at is not None and (data.get("show_on_dashboard") or data.get("show_on_public")):
         raise HTTPException(409, "Restore this site before showing it on the dashboard or "
                                  "public page.")
+    if "hours" in data:
+        data["hours"] = body.hours.stored() if body.hours else None
     for k in ("address", "map_url", "domain"):
         if k in data and isinstance(data[k], str):
             data[k] = data[k].strip() or None

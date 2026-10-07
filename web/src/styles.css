@@ -249,3 +249,12 @@ button.sort { background: none; border: none; padding: 0; color: var(--muted); f
 .viz-scale > span:first-child { margin-right: 6px; } .viz-scale > span:last-child { margin-left: 6px; }
 .viz-scale-step { width: 22px; height: 10px; border-radius: 2px; }
 .topbar nav a.active { font-weight: 700; text-decoration: none; }
+.hours-table { width: auto; margin-bottom: 8px; }
+.hours-table th { color: var(--text); font-weight: 600; padding-right: 16px; }
+.hours-table td { padding: 4px 10px 4px 0; }
+.check.inline { margin: 0; }
+.hours-times { display: inline-flex; align-items: center; gap: 8px; }
+.hours-times input, .override input { font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+fieldset.override { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; }
+.override-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 8px; }
+.override-head label { display: flex; gap: 6px; align-items: center; font-size: 0.85rem; font-weight: 600; }

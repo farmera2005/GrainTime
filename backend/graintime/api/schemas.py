@@ -3,9 +3,9 @@ from __future__ import annotations
 import ipaddress
 import re
 from datetime import date, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
 
 HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
 CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{1,19}$")
@@ -167,6 +167,42 @@ class ConnectionFields(BaseModel):
         return f"ConnectionFields(host={self.host!r}, port={self.port}, database={self.database!r})"
 
 
+HHMM = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
+
+
+class DayHours(BaseModel):
+    open: HHMM
+    close: HHMM
+
+    @model_validator(mode="after")
+    def _order(self):
+        if self.close <= self.open:
+            raise ValueError("Closing time must be after opening time (same day).")
+        return self
+
+
+class HoursOverride(BaseModel):
+    label: str = Field(default="", max_length=60)
+    date_from: date
+    date_to: date
+    weekly: list[DayHours | None] = Field(min_length=7, max_length=7)
+
+    @model_validator(mode="after")
+    def _dates(self):
+        if self.date_to < self.date_from:
+            raise ValueError("An hours override ends before it starts.")
+        return self
+
+
+class Hours(BaseModel):
+    """Weekly opening hours (Monday first; null = closed) plus date-range overrides."""
+    weekly: list[DayHours | None] = Field(min_length=7, max_length=7)
+    overrides: list[HoursOverride] = Field(default_factory=list, max_length=20)
+
+    def stored(self) -> dict:
+        return self.model_dump(mode="json")
+
+
 class SiteCreate(ConnectionFields):
     port: int = Field(ge=1, le=65535)
     name: str = Field(min_length=1, max_length=200)
@@ -206,6 +242,7 @@ class SiteUpdate(BaseModel):
     show_on_public: bool | None = None
     mapping_profile_id: int | None = None          # null clears it (stops polling)
     poll_interval_s: int | None = Field(default=None, ge=15, le=3600)   # null = global default
+    hours: Hours | None = None                     # null clears them (open state unknown)
 
     @field_validator("code")
     @classmethod
@@ -250,6 +287,7 @@ class SiteOut(BaseModel):
     archived: bool
     mapping_profile_id: int | None = None
     poll_interval_s: int | None = None
+    hours: dict | None = None
     # Collection status at a glance (sites list)
     last_success_at: str | None = None
     last_error: dict | None = None

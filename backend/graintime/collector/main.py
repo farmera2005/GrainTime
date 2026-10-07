@@ -1,7 +1,8 @@
 """Collector service entry point: admin jobs, scheduled site polling, /health.
 
 Jobs (test connection, discovery, preview, backfill) are claimed every second;
-sites due for a poll are checked every 5 seconds.
+sites due for a poll are checked every 5 seconds; the public page's aggregates
+are recomputed every 30 seconds (central database only).
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from ..common.db import get_sessionmaker
 from ..common.logging import get_logger, setup_logging
+from ..common.publish import publish
 from .jobs import JobRunner
 from .poller import Poller
 
@@ -20,6 +23,7 @@ log = get_logger("collector")
 HEALTH_PORT = 8081
 LOOP_INTERVAL_S = 1.0
 POLL_CHECK_EVERY_S = 5.0
+PUBLISH_EVERY_S = 30.0
 STALE_LOOP_S = 30
 
 state = {"last_loop": 0.0, "db_ok": False, "started": time.time()}
@@ -55,6 +59,7 @@ def main() -> None:
     runner = JobRunner()
     poller = Poller(runner)
     last_poll_check = 0.0
+    last_publish = 0.0
     backoff = 1.0
     recovered = False
     log.info("collector started")
@@ -67,6 +72,13 @@ def main() -> None:
             if time.monotonic() - last_poll_check >= POLL_CHECK_EVERY_S:
                 last_poll_check = time.monotonic()
                 poller.tick()
+            if time.monotonic() - last_publish >= PUBLISH_EVERY_S:
+                last_publish = time.monotonic()
+                try:
+                    with get_sessionmaker()() as db:
+                        publish(db)
+                except Exception as exc:   # never let the public page stop collection
+                    log.warning("public aggregates not updated", extra={"error": str(exc)[:300]})
             state["db_ok"] = True
             backoff = 1.0
             state["last_loop"] = time.time()

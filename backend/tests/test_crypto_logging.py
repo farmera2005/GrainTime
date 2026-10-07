@@ -52,8 +52,13 @@ def test_secrets_init_creates_once(tmp_path):
 def test_secrets_init_main_runs(tmp_path, monkeypatch, capsys):
     from graintime.common import secrets_init
     monkeypatch.setattr(secrets_init, "SECRETS_DIR", tmp_path)
-    monkeypatch.setattr(secrets_init.ensure_secrets, "__defaults__", (tmp_path,))
+    monkeypatch.setattr(secrets_init.ensure_secrets, "__defaults__", (tmp_path, None))
+    pub = tmp_path / "public"
+    pub.mkdir()
+    monkeypatch.setattr(secrets_init, "PUBLIC_SECRETS_DIR", str(pub))
     assert secrets_init.main() == 0
     assert "generated secrets" in capsys.readouterr().out
+    # The public volume gets only the public role's password, never the others.
+    assert sorted(p.name for p in pub.iterdir()) == ["public_db_password"]
     assert secrets_init.main() == 0
     assert "already present" in capsys.readouterr().out

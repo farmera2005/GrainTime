@@ -23,9 +23,10 @@ services:
   init:
     <<: *backend
     command: ["python", "-m", "graintime.common.secrets_init"]
-    user: "0:0"          # writes into the fresh secrets volume
+    user: "0:0"          # writes into the fresh secrets volumes
     volumes:
       - secrets:/run/graintime-secrets
+      - public-secrets:/run/graintime-public-secrets
     restart: "no"
 
   db:
@@ -37,6 +38,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - secrets:/run/graintime-secrets:ro
+    networks: [default, public]
     depends_on:
       init: { condition: service_completed_successfully }
     healthcheck:
@@ -49,7 +51,11 @@ services:
 
   migrate:
     <<: *backend
-    command: ["alembic", "upgrade", "head"]
+    # Schema, then enable the public service's read-only database login.
+    command: ["sh", "-c", "alembic upgrade head && python -m graintime.common.public_role"]
+    volumes:
+      - secrets:/run/graintime-secrets:ro
+      - public-secrets:/run/graintime-public-secrets:ro
     depends_on:
       db: { condition: service_healthy }
     restart: "no"
@@ -79,8 +85,33 @@ services:
       # Internal network only. How (and whether) anything is published to the
       # internet is decided separately; nothing here exposes it.
       - "${WEB_PORT:-8080}:8080"
+    networks: [default, public]
     depends_on:
       api: { condition: service_started }
+    restart: unless-stopped
+    logging: *logging
+
+  # Farmer-facing wait times and JSON feed. Isolated: its own image (no api or
+  # collector code), a network shared only with the database and the web
+  # server, and a database role that can read one aggregates table.
+  # Staff can preview it at http://<this-host>:8080/public/ . The port below
+  # listens on this host only (127.0.0.1): publishing it to the internet
+  # (reverse proxy, tunnel, ...) is a separate, deliberate decision.
+  public:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.public
+    image: graintime-public:latest
+    volumes:
+      - public-secrets:/run/graintime-public-secrets:ro
+    networks: [public]
+    ports:
+      - "127.0.0.1:${PUBLIC_PORT:-8081}:8000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
     restart: unless-stopped
     logging: *logging
 
@@ -119,6 +150,11 @@ services:
     restart: unless-stopped
     logging: *logging
 
+networks:
+  default:
+  public:
+
 volumes:
   pgdata:
   secrets:
+  public-secrets:

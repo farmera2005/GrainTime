@@ -47,6 +47,7 @@ export function App() {
       <div className="app">
         <header className="topbar">
           <span className="brand">GrainTime</span>
+          <nav><a href="/public/" target="_blank" rel="noopener">Public page ↗</a></nav>
           <span className="spacer" />
           <span className="muted">{status.user.display_name}</span>
           <button className="link" onClick={logout}>Sign out</button>
