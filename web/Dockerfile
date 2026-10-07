@@ -11,8 +11,17 @@ ENV npm_config_fetch_retries=5 \
     npm_config_fetch_retry_maxtimeout=120000 \
     npm_config_fetch_timeout=600000 \
     npm_config_update_notifier=false
+# Extra root certificates from ./certs (TLS-inspecting networks; see
+# certs/README.md). Node only uses them when there are some.
+COPY --from=certs . /tmp/extra-certs/
+RUN mkdir -p /etc/ssl/extra; \
+    for f in /tmp/extra-certs/*.crt /tmp/extra-certs/*.pem; do \
+      if [ -f "$f" ]; then cat "$f"; echo; fi; \
+    done > /etc/ssl/extra/ca.pem; \
+    rm -rf /tmp/extra-certs
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
+    if [ -s /etc/ssl/extra/ca.pem ]; then export NODE_EXTRA_CA_CERTS=/etc/ssl/extra/ca.pem; fi; \
     npm ci --no-audit --no-fund --loglevel=http
 COPY . .
 RUN npm run build

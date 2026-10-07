@@ -14,3 +14,6 @@ __pycache__/
 # node
 node_modules/
 dist/
+# organisation root certificates for TLS-inspecting networks (see certs/README.md)
+certs/*
+!certs/README.md

@@ -12,6 +12,9 @@ elevators. See README.md for install, services and deployment notes.
   Sites, users, settings and the first admin come from the browser (setup
   wizard, then the admin panel). Env vars are optional overrides only
   (`GRAINTIME_*`, used by tests). Don't add required env vars or config files.
+- Image builds trust any root certificates placed in `certs/` (passed to every
+  build as the `certs` additional context), for networks that inspect HTTPS.
+  Never "fix" certificate errors by disabling TLS verification.
 - **Only the collector talks to site databases.** The api queues work in
   `collector_jobs` (`test_connection`, `discovery`; later preview and
   backfill). The collector claims jobs with `FOR UPDATE SKIP LOCKED`, runs at

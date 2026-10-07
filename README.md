@@ -45,12 +45,16 @@ network-related:
 - **Just run `docker compose up -d --build` again.** Downloads retry
   automatically and are cached, so a second run continues where the first
   stopped.
-- **Behind a proxy or a TLS-inspecting firewall?** Docker needs the proxy
-  configured for builds (Docker Desktop: Settings → Resources → Proxies; Linux:
-  `~/.docker/config.json` `proxies` and the daemon's proxy settings). The
-  inspection CA must be trusted, or `registry.npmjs.org`, `pypi.org`,
-  `files.pythonhosted.org`, `deb.debian.org` and `packages.microsoft.com` must
-  be allowed through.
+- **`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, `SELF_SIGNED_CERT_IN_CHAIN` or
+  `certificate verify failed`?** A firewall is inspecting HTTPS. Put your
+  organisation's root certificate (PEM, `.crt` or `.pem`) in the
+  [`certs/`](certs/README.md) folder and rebuild. Every image build then trusts
+  it. Alternatively, ask IT to exempt `registry.npmjs.org`, `pypi.org`,
+  `files.pythonhosted.org`, `deb.debian.org` and `packages.microsoft.com` from
+  inspection.
+- **Behind a proxy?** Docker needs the proxy configured for builds (Linux:
+  the `proxies` section of `~/.docker/config.json` and a systemd drop-in for
+  the daemon; Docker Desktop: Settings → Resources → Proxies).
 - If only one service failed, the others may show as `CANCELED`. That just
   means the build stopped; it isn't a separate error.
 

@@ -12,6 +12,8 @@ x-backend: &backend
   build:
     context: ./backend
     dockerfile: Dockerfile.api
+    additional_contexts:
+      certs: ./certs
   image: graintime-api:latest
   volumes:
     - secrets:/run/graintime-secrets:ro
@@ -64,6 +66,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.collector
+      additional_contexts:
+        certs: ./certs
     image: graintime-collector:latest
     volumes:
       - secrets:/run/graintime-secrets:ro
@@ -73,7 +77,10 @@ services:
     logging: *logging
 
   web:
-    build: ./web
+    build:
+      context: ./web
+      additional_contexts:
+        certs: ./certs
     image: graintime-web:latest
     ports:
       # Internal network only. How (and whether) anything is published to the
