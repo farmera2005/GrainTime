@@ -210,3 +210,5 @@ class PublicSiteStatus(Base):
     data_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     stale_after_min: Mapped[int] = mapped_column(Integer)
+    green_max_min: Mapped[int | None] = mapped_column(Integer)   # level limits (settings, not data)
+    yellow_max_min: Mapped[int | None] = mapped_column(Integer)

@@ -37,7 +37,8 @@ def site_row(db: DbSession, site: Site, state: SiteCollectorState | None, g: dic
         open_state=st["open"], hours_text=st["text"], traffic=traffic, minutes=minutes,
         level=metrics.level(minutes, f), trucks_on_site=onsite,
         data_as_of=state.last_success_at if state else None, computed_at=now,
-        stale_after_min=int(g["public_stale_after_min"]))
+        stale_after_min=int(g["public_stale_after_min"]),
+        green_max_min=f.green_max_min, yellow_max_min=f.yellow_max_min)
 
 
 def publish(db: DbSession, now: datetime | None = None) -> int:

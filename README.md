@@ -181,9 +181,13 @@ Admins choose which sites appear with **Show on dashboard** on the site page.
 ### The public wait-times page
 
 A mobile-first page for farmers, with no sign-in: every site that has
-**Public page** switched on, with its current time on site, trucks on site now,
-open or closed (from the site's **Operating hours**), and when the data was
-last updated. The same data is served as a JSON feed (`feed.json`) for the
+**Public page** switched on, with its current time on site (with a
+Short / Moderate / Long label and a gauge against the green and yellow
+limits), trucks on site now, open or closed (from the site's **Operating
+hours**), a directions link, and when the data was last updated. A summary
+strip shows how many locations are open, the shortest current time on site and
+the trucks on site across all locations. It follows the device's light or dark
+mode, prints cleanly, and needs no JavaScript. The same data is served as a JSON feed (`feed.json`) for the
 website or member portal.
 
 - **Preview it** at `http://<this-host>:8080/public/` (also linked as

@@ -88,6 +88,7 @@ def test_publish_aggregates_with_minimum_trucks(db_clean):
     assert (r["light"].traffic, r["light"].minutes, r["light"].trucks_on_site) == ("light", None, 1)
     assert (r["quiet"].traffic, r["quiet"].minutes, r["quiet"].open_state) == ("none", None, None)
     assert r["busy"].data_as_of == NOW and r["busy"].stale_after_min == 15
+    assert (r["busy"].green_max_min, r["busy"].yellow_max_min) == (20, 40)
 
     # Turning the public switch off removes the site on the next publish.
     with get_sessionmaker()() as db:
@@ -176,7 +177,8 @@ def test_public_page_and_feed(pub):
     # stale data is never shown as current, not even the truck count
     assert sites["old"]["status"] == "stale" and sites["old"]["trucks_on_site"] is None
     assert set(sites["busy"]) == {"code", "name", "address", "map_url", "open", "hours", "status",
-                                  "time_on_site_min", "level", "trucks_on_site", "last_updated"}
+                                  "time_on_site_min", "level", "trucks_on_site", "last_updated", "level_limits"}
+    assert sites["busy"]["level_limits"] == {"short_max_min": 20, "moderate_max_min": 40}
 
     page = c.get("/")
     assert page.status_code == 200
@@ -184,6 +186,8 @@ def test_public_page_and_feed(pub):
     assert "Busy Elevator" in body and "27" in body and "Moderate" in body
     assert "Data delayed" in body and "No recent trucks" in body
     assert "inbound scale" in body                      # the known limitation is stated
+    assert 'role="img"' in body and "27 minutes on site, moderate" in body      # gauge has a text equivalent
+    assert "Shortest time on site" in body and "Open now" in body
     assert "default-src 'none'" in page.headers["content-security-policy"]
 
 
