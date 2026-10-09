@@ -45,7 +45,7 @@ export function DataCollection({ site, onChange }: { site: Site; onChange: (s: S
   return (
     <div className="collection">
       <div className="row">
-        <Field label="Mapping profile" hint={<Link to="/admin/profiles">Manage mapping profiles</Link>}>
+        <Field label="Mapping profile" hint={<Link to="/config/profiles">Manage mapping profiles</Link>}>
           <select
             value={site.mapping_profile_id ?? ""}
             disabled={busy}

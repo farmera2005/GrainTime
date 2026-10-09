@@ -258,3 +258,24 @@ button.sort { background: none; border: none; padding: 0; color: var(--muted); f
 fieldset.override { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; }
 .override-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 8px; }
 .override-head label { display: flex; gap: 6px; align-items: center; font-size: 0.85rem; font-weight: 600; }
+
+/* Configuration area */
+.config { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 24px; align-items: start; }
+.config-nav { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 2px; }
+.config-title { font-size: 1.1rem; margin: 6px 0 10px; }
+.config-group { display: flex; flex-direction: column; margin-bottom: 12px; }
+.config-group-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; margin: 0 0 4px 10px; }
+.config-nav a { color: var(--text); text-decoration: none; padding: 6px 10px; border-radius: 6px; }
+.config-nav a:hover { background: color-mix(in srgb, var(--border) 40%, transparent); }
+.config-nav a.active { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.config-body h2:first-child, .config-body .page-head:first-child h2 { margin-top: 6px; }
+@media (max-width: 760px) {
+  .config { grid-template-columns: minmax(0, 1fr); }
+  .config-nav { position: static; flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .config-title { width: 100%; margin-bottom: 4px; }
+  .config-group { flex-direction: row; flex-wrap: wrap; margin: 0; }
+  .config-group-label { display: none; }
+}
+.field textarea { font: inherit; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); width: 100%; }
+.mono, textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+td select { font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }

@@ -15,7 +15,7 @@ export function ProfileList() {
     <>
       <div className="page-head">
         <h2>Mapping profiles</h2>
-        <Link className="button" to="/admin/profiles/new">New profile</Link>
+        <Link className="button" to="/config/profiles/new">New profile</Link>
       </div>
       <p className="muted">
         A mapping profile tells GrainTime where tickets and weigh times are in a site's scale database. Sites on the
@@ -30,13 +30,13 @@ export function ProfileList() {
             <tbody>
               {profiles.map((p) => (
                 <tr key={p.id}>
-                  <td><Link to={`/admin/profiles/${p.id}`}>{p.name}</Link></td>
+                  <td><Link to={`/config/profiles/${p.id}`}>{p.name}</Link></td>
                   <td>{p.sites.length ? p.sites.map((s) => s.name).join(", ") : <span className="muted">no sites</span>}</td>
                   <td>{fmtDateTime(p.updated_at)}</td>
                   <td className="row-actions">
-                    <Link className="button secondary small-button" to={`/admin/profiles/${p.id}`}>Edit</Link>
+                    <Link className="button secondary small-button" to={`/config/profiles/${p.id}`}>Edit</Link>
                     <button className="secondary small-button" onClick={async () => {
-                      try { const c = await api.cloneProfile(p.id); nav(`/admin/profiles/${c.id}`); }
+                      try { const c = await api.cloneProfile(p.id); nav(`/config/profiles/${c.id}`); }
                       catch (e) { setError(e instanceof Error ? e.message : "Could not clone"); }
                     }}>Clone</button>
                     {!p.sites.length ? (
@@ -96,7 +96,7 @@ export function ProfileEdit() {
     try {
       if (isNew) {
         const p = await api.createProfile({ name, description: description || null, config: cfg });
-        nav(`/admin/profiles/${p.id}`, { replace: true });
+        nav(`/config/profiles/${p.id}`, { replace: true });
         setMessage({ kind: "ok", text: "Profile created." });
       } else if (id) {
         const p = await api.updateProfile(id, { name, description: description || null, config: cfg, confirm_in_use: confirm });
@@ -121,7 +121,7 @@ export function ProfileEdit() {
     <>
       <div className="page-head">
         <h2>{isNew ? "New mapping profile" : name || "Mapping profile"}</h2>
-        <Link to="/admin/profiles">All profiles</Link>
+        <Link to="/config/profiles">All profiles</Link>
       </div>
       {message ? (
         <Notice kind={message.kind}>

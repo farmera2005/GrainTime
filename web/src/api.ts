@@ -285,6 +285,33 @@ export function statsQuery(q: StatsQuery, format?: "csv"): string {
   return p.toString();
 }
 
+export type LdapSettings = {
+  enabled: boolean;
+  servers: string[];
+  security: "ldaps" | "starttls" | "none";
+  verify_cert: boolean;
+  ca_cert_pem: string | null;
+  bind_mode: "service" | "direct";
+  bind_dn: string | null;
+  bind_password?: string;          // write-only; blank keeps the saved one
+  has_bind_password?: boolean;
+  direct_bind_template: string | null;
+  base_dn: string;
+  user_filter: string;
+  display_name_attr: string;
+  admin_groups: string[];
+  viewer_groups: string[];
+  allow_any_user: boolean;
+  nested_groups: boolean;
+};
+export type LdapTestResult = {
+  ok: boolean;
+  code?: string;
+  steps: { step: string; ok: boolean; detail: string }[];
+  user: { username: string; display_name: string; dn: string; role: string } | null;
+};
+export type UserAdmin = User & { is_active: boolean; created_at: string | null; last_login_at: string | null };
+
 export class ApiError extends Error {
   status: number;
   fields: Record<string, string>;
@@ -387,4 +414,14 @@ export const api = {
   saveDashboard: (id: number, b: { name: string; filters: DashFilters; widgets: Widget[] }) => request<Dashboard>("PUT", `/api/dashboards/${id}`, b),
   resetDashboard: (id: number) => request<Dashboard>("POST", `/api/dashboards/${id}/reset`),
   deleteDashboard: (id: number) => request<{ deleted: boolean }>("DELETE", `/api/dashboards/${id}`),
+  authOptions: () => request<{ ldap: boolean }>("GET", "/api/auth/options"),
+  getLdap: () => request<LdapSettings>("GET", "/api/settings/ldap"),
+  putLdap: (b: LdapSettings) => request<LdapSettings>("PUT", "/api/settings/ldap", b),
+  testLdap: (b: { settings: LdapSettings; username?: string; password?: string }) =>
+    request<LdapTestResult>("POST", "/api/settings/ldap/test", b),
+  listUsers: () => request<UserAdmin[]>("GET", "/api/admin/users"),
+  createUser: (b: { username: string; display_name: string; password: string; role: "viewer" | "admin" }) =>
+    request<UserAdmin>("POST", "/api/admin/users", b),
+  updateUser: (id: number, b: Partial<{ display_name: string; role: "viewer" | "admin"; is_active: boolean; password: string }>) =>
+    request<UserAdmin>("PATCH", `/api/admin/users/${id}`, b),
 };

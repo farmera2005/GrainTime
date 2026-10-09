@@ -54,9 +54,61 @@ certificates need installing. Failures are almost always network-related:
 - If only one service failed, the others may show as `CANCELED`. That just
   means the build stopped; it isn't a separate error.
 
+### Configuration
+
+Administrators find every setting under **Configuration** in the top menu,
+grouped in a side menu:
+
+| Group | Page | What it holds |
+|---|---|---|
+| Scale sites | **Sites** | Connections, data collection, where each site appears, operating hours, discovery, archive/delete |
+| | **Mapping profiles** | How tickets and weigh times are read from each kind of scale database |
+| Statistics | **Collection & metrics** | Poll interval, green/yellow limits, current-time window, open-ticket cutoff, duration ceiling, backfill default |
+| | **Public page** | When to hold back a number (minimum trucks, staleness) and which sites are listed |
+| Access | **Users** | Local accounts and directory users: roles, enable/disable, passwords |
+| | **Sign-in & LDAP** | Directory (Active Directory / LDAP) sign-in |
+
+Old `/admin/...` bookmarks redirect to the matching Configuration page.
+
+### Signing in with LDAP / Active Directory
+
+Under **Configuration → Sign-in & LDAP**, staff can sign in with their network
+username and password. Local GrainTime accounts are always checked first and
+keep working when the directory is down, so keep at least one local
+administrator (the one created in the setup wizard).
+
+1. **Servers**: one or more domain controllers, tried in order.
+   **LDAPS** (port 636) is recommended; **StartTLS** (389) also works. If the
+   servers' certificates come from your own certificate authority (AD
+   Certificate Services), paste that CA certificate in PEM form. Use the name
+   on the certificate (usually the DC's host name).
+2. **Finding users**: a read-only **service account** looks users up
+   (recommended; any domain user account can read the directory), or GrainTime
+   signs in **directly** as each user with a template such as
+   `{username}@mercerlandmark.com`. For Active Directory the user filter is
+   `(&(objectClass=user)(sAMAccountName={username}))`.
+3. **Groups**: members of an *administrator group* become administrators;
+   members of a *viewer group* can see the dashboard. Everyone else is refused
+   (unless you allow any directory user as a viewer). With *Include nested
+   groups* (Active Directory only) groups inside these groups count too.
+4. **Test** with a real username and password: each step (connection,
+   service account, finding the user, password, groups and role) is shown with
+   the exact cause of any failure. Nothing is saved until you click **Save**.
+
+Users can type `adamf`, `MERCER\adamf` or `adamf@mercerlandmark.com`. A
+directory user gets a GrainTime user row at first sign-in (listed under
+**Users**); the role is worked out from the groups at every sign-in, and an
+administrator can disable the account in GrainTime at any time (which signs
+them out at once). A local account is never taken over by a directory user
+with the same name. Sign-in sessions last up to 12 hours, so a group change
+takes effect at the next sign-in.
+
+The service-account password is stored encrypted like site passwords, never
+shown again, and recorded in the audit log only as "(changed)".
+
 ### Managing sites after setup
 
-In the admin panel, **Sites** lists every site, with an **Edit** button on each.
+Under **Configuration → Sites** is a list of every site, with an **Edit** button on each.
 A site's page lets you:
 
 - change its name, code, address, map link and connection details. Leave the
@@ -153,7 +205,7 @@ website or member portal.
   trucks* setting (default 3), the page says *Light traffic* or *No recent
   trucks* instead of a number. When a site's data is older than the *public
   staleness* setting (default 15 min), it says *Data delayed* and hides the
-  numbers. Both limits are under Defaults.
+  numbers. Both limits are under Configuration → Public page.
 - Cached (15 s in the service, 30 s for browsers), rate limited per client
   (60 requests a minute), GET only, with strict security headers.
   `X-Forwarded-For` is trusted only from private-network peers such as your
@@ -232,6 +284,7 @@ a time.
 | cryptography (Fernet) | Authenticated encryption for site passwords at rest |
 | python-tds + pyspnego + pyOpenSSL | Windows (domain) account sign-in over NTLM, which ODBC Driver 18 on Linux lacks; used only for sites set to Windows accounts |
 | argon2-cffi | Current recommended password hashing for local accounts |
+| ldap3 | Pure-Python LDAP client for directory sign-in (LDAPS, StartTLS, service-account or direct bind); no system libraries needed |
 | React + TypeScript + Vite, React Router | Required stack; Vite for fast builds, no other UI dependencies |
 | nginx (unprivileged image) | Serves the built frontend and proxies the api |
 
@@ -243,7 +296,10 @@ a time.
   and is wiped from the job when it finishes.
 - Sessions are server-side, in HttpOnly SameSite=Strict cookies. Every
   state-changing request also needs an `X-GrainTime` header (CSRF guard).
-  Failed sign-ins are rate-limited.
+  Failed sign-ins are rate-limited (local and directory alike). Directory
+  sign-in refuses empty passwords (an empty LDAP bind is anonymous), escapes
+  usernames before they go into a search filter, and verifies the server's
+  certificate unless an administrator explicitly turns that off.
 - Every change made in the admin panel or the wizard goes to `audit_log` (who,
   when, old and new values). Passwords are recorded only as "(changed)".
 - Nothing is exposed to the internet. How the public page is published will be

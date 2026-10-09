@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from ..common.db import get_engine
 from ..common.logging import get_logger, setup_logging
-from . import routes_dashboards, routes_profiles, routes_setup, routes_sites, routes_stats
+from . import routes_auth_admin, routes_dashboards, routes_profiles, routes_setup, routes_sites, routes_stats
 
 setup_logging("api")
 log = get_logger("api")
@@ -44,3 +44,4 @@ app.include_router(routes_sites.router)
 app.include_router(routes_profiles.router)
 app.include_router(routes_stats.router)
 app.include_router(routes_dashboards.router)
+app.include_router(routes_auth_admin.router)

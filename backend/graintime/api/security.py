@@ -1,8 +1,9 @@
 """Local accounts, server-side sessions, and role checks.
 
-Local accounts are the break-glass administrator created in the setup wizard
-(and development logins). Entra ID single sign-on is added once confirmed;
-SSO users get rows in `users` with auth_source='entra' and no password.
+Local accounts (auth_source='local') include the break-glass administrator
+created in the setup wizard and any added under Configuration -> Users.
+Directory users (auth_source='ldap', see common/ldap_auth.py) get a row on
+first sign-in, with no password and the role from their groups.
 """
 
 from __future__ import annotations

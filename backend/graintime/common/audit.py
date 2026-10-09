@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session as DbSession
 from .models import AuditLog
 
 # Never written to the audit log, whatever the caller passes.
-SECRET_FIELDS = {"password", "password_encrypted", "password_hash", "token", "token_hash"}
+SECRET_FIELDS = {"password", "password_encrypted", "password_hash", "token", "token_hash",
+                 "bind_password", "bind_password_encrypted"}
 
 
 def scrub(values: dict[str, Any] | None) -> dict[str, Any] | None:

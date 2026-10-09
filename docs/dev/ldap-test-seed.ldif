@@ -1,0 +1,56 @@
+# Development/test only: a tiny directory for the optional LDAP tests
+# (backend/tests/test_ldap.py). The passwords below are test fixtures.
+
+dn: dc=corp,dc=example
+objectClass: dcObject
+objectClass: organization
+o: Corp
+dc: corp
+
+dn: ou=People,dc=corp,dc=example
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Groups,dc=corp,dc=example
+objectClass: organizationalUnit
+ou: Groups
+
+dn: uid=svc-graintime,ou=People,dc=corp,dc=example
+objectClass: inetOrgPerson
+uid: svc-graintime
+cn: svc
+sn: svc
+userPassword: Svc-Pass-2026!
+
+dn: uid=alice,ou=People,dc=corp,dc=example
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Admin
+sn: Admin
+displayName: Alice Admin
+userPassword: Alice-Pass-2026!
+
+dn: uid=bob,ou=People,dc=corp,dc=example
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Viewer
+sn: Viewer
+displayName: Bob Viewer
+userPassword: Bob-Pass-2026!
+
+dn: uid=carol,ou=People,dc=corp,dc=example
+objectClass: inetOrgPerson
+uid: carol
+cn: Carol Nogroup
+sn: Nogroup
+userPassword: Carol-Pass-2026!
+
+dn: cn=GrainTime Admins,ou=Groups,dc=corp,dc=example
+objectClass: groupOfNames
+cn: GrainTime Admins
+member: uid=alice,ou=People,dc=corp,dc=example
+
+dn: cn=GrainTime Viewers,ou=Groups,dc=corp,dc=example
+objectClass: groupOfNames
+cn: GrainTime Viewers
+member: uid=bob,ou=People,dc=corp,dc=example

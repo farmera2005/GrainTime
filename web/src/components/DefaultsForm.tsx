@@ -16,7 +16,7 @@ const FIELDS: { key: Key; label: string; unit: string; hint?: string }[] = [
 ];
 
 /** Global defaults. Every site can override these later in the admin panel. */
-export function DefaultsForm({ onSaved, submitLabel }: { onSaved: () => void; submitLabel?: string }) {
+export function DefaultsForm({ onSaved, submitLabel, fields }: { onSaved: () => void; submitLabel?: string; fields?: Key[] }) {
   const [d, setD] = useState<Defaults | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export function DefaultsForm({ onSaved, submitLabel }: { onSaved: () => void; su
   return (
     <form className="form" onSubmit={submit} noValidate>
       <div className="grid">
-        {FIELDS.map((f) => (
+        {FIELDS.filter((f) => !fields || fields.includes(f.key)).map((f) => (
           <Field key={f.key} label={f.label} hint={f.hint} error={errors[f.key]}>
             <span className="with-unit">
               <input

@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError } from "../api";
 import { Field, Notice } from "../components/Field";
 
@@ -7,6 +7,8 @@ export function LoginForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ldap, setLdap] = useState(false);
+  useEffect(() => { api.authOptions().then((o) => setLdap(o.ldap)).catch(() => {}); }, []);
 
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
@@ -24,7 +26,7 @@ export function LoginForm({ onDone }: { onDone: () => void | Promise<void> }) {
 
   return (
     <form className="form narrow" onSubmit={submit}>
-      <Field label="Username">
+      <Field label="Username" hint={ldap ? "Your network (Windows) username, or a GrainTime account" : undefined}>
         <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus />
       </Field>
       <Field label="Password">

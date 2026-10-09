@@ -13,8 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
-from ..common import audit, settings_store
+from ..common import audit, ldap_auth, settings_store
 from ..common.config import get_settings
+from ..common.logging import get_logger
 from ..common.models import CollectorJob, Site, User
 from .schemas import AdminCreate, Defaults, LoginIn, UserOut
 from .security import (end_session, get_db, hash_password, optional_user, require_admin,
@@ -22,6 +23,7 @@ from .security import (end_session, get_db, hash_password, optional_user, requir
 
 router = APIRouter(prefix="/api")
 STARTED_AT = datetime.now(timezone.utc)
+log = get_logger("api.auth")
 
 
 def _user_out(u: User) -> UserOut:
@@ -113,19 +115,73 @@ def complete_setup(db: DbSession = Depends(get_db), user: User = Depends(require
     return {"setup_complete": True}
 
 
+@router.get("/auth/options")
+def auth_options(db: DbSession = Depends(get_db)):
+    """What the sign-in page offers (no secrets)."""
+    cfg = ldap_auth.config_with_defaults(settings_store.get_value(db, ldap_auth.SETTINGS_KEY))
+    return {"ldap": bool(cfg["enabled"])}
+
+
 @router.post("/auth/login", response_model=UserOut)
 def login(body: LoginIn, request: Request, response: Response, db: DbSession = Depends(get_db)):
+    """Local accounts first (the break-glass admin always works), then LDAP if enabled."""
     key = body.username.strip().lower()
     if throttle.blocked(key):
         raise HTTPException(429, "Too many failed sign-ins. Try again in 15 minutes.")
     user = db.scalar(select(User).where(User.username == key))
-    if not user or not user.is_active or not verify_password(user.password_hash, body.password):
-        throttle.fail(key)
-        raise HTTPException(401, "Wrong username or password.")
+    if user is not None and user.auth_source == "local":
+        if not user.is_active or not verify_password(user.password_hash, body.password):
+            throttle.fail(key)
+            raise HTTPException(401, "Wrong username or password.")
+    else:
+        user = _ldap_login(db, body.username, body.password, key)
     throttle.clear(key)
     start_session(db, user, request, response)
     db.commit()
     return _user_out(user)
+
+
+def _ldap_login(db: DbSession, raw: str, password: str, key: str) -> User:
+    cfg = ldap_auth.config_with_defaults(settings_store.get_value(db, ldap_auth.SETTINGS_KEY))
+    if not cfg["enabled"]:
+        throttle.fail(key)
+        raise HTTPException(401, "Wrong username or password.")
+    try:
+        found = ldap_auth.authenticate(cfg, raw, password)
+    except ldap_auth.LdapError as exc:
+        if exc.code in ("server_unreachable", "timeout", "tls_failed", "certificate_untrusted", "not_configured",
+                        "service_bind_failed", "bind_failed", "multiple_users",
+                        "nested_unsupported", "base_dn_not_found", "search_failed", "tls_required", "ldap_error"):
+            log.warning("ldap sign-in unavailable", extra={"code": exc.code})
+            raise HTTPException(503, "The directory server could not be reached. Try again, or ask an "
+                                     "administrator.")
+        throttle.fail(key)
+        if exc.code == "not_in_group":
+            raise HTTPException(403, exc.message)
+        raise HTTPException(401, "Wrong username or password.")
+    user = db.scalar(select(User).where(User.username == found.username))
+    if user is not None and user.auth_source == "local":
+        # A local account with the same name is never taken over by the directory.
+        throttle.fail(key)
+        raise HTTPException(401, "Wrong username or password.")
+    if user is None:
+        user = User(username=found.username, display_name=found.display_name, role=found.role,
+                    auth_source="ldap", password_hash=None, is_active=True)
+        db.add(user)
+        db.flush()
+        audit.record(db, actor_id=user.id, actor_name=user.username, action="user.created_from_ldap",
+                     entity_type="user", entity_id=user.id,
+                     new={"username": user.username, "role": user.role, "auth_source": "ldap"})
+    elif not user.is_active:
+        throttle.fail(key)
+        raise HTTPException(403, "Your GrainTime account has been disabled. Ask an administrator.")
+    else:
+        if user.role != found.role:
+            audit.record(db, actor_id=user.id, actor_name=user.username, action="user.role_from_ldap",
+                         entity_type="user", entity_id=user.id, old={"role": user.role}, new={"role": found.role})
+            user.role = found.role
+        user.display_name = found.display_name
+    return user
 
 
 @router.post("/auth/logout")

@@ -10,19 +10,20 @@ import { ProfileEdit, ProfileList } from "./Profiles";
 import { Notice } from "../components/Field";
 import { SiteForm } from "../components/SiteForm";
 import { HoursEditor } from "../components/HoursEditor";
+import { UsersPage } from "./Users";
+import { LdapSettingsPage } from "./LdapSettings";
 
-/** Admin panel plus the dashboard. */
+/** The signed-in app for administrators: the dashboard plus Configuration. */
 export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promise<void> }) {
-  const wide = useLocation().pathname.startsWith("/dashboard");
+  const path = useLocation().pathname;
+  const wide = path.startsWith("/dashboard");
   return (
     <div className="app">
       <header className="topbar">
         <Link to="/dashboard" className="brand">GrainTime</Link>
         <nav>
           <NavLink to="/dashboard">Dashboard</NavLink>
-          <NavLink to="/admin/sites">Sites</NavLink>
-          <NavLink to="/admin/profiles">Mapping profiles</NavLink>
-          <NavLink to="/admin/settings">Defaults</NavLink>
+          <NavLink to="/config">Configuration</NavLink>
           <a href="/public/" target="_blank" rel="noopener">Public page ↗</a>
         </nav>
         <span className="spacer" />
@@ -32,15 +33,59 @@ export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promi
       <main className={wide ? "content content-wide" : "content"}>
         <Routes>
           <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/admin/sites" element={<SiteList />} />
-          <Route path="/admin/sites/new" element={<NewSite />} />
-          <Route path="/admin/sites/:id" element={<SiteDetail />} />
-          <Route path="/admin/settings" element={<SettingsPage />} />
-          <Route path="/admin/profiles" element={<ProfileList />} />
-          <Route path="/admin/profiles/:id" element={<ProfileEdit />} />
+          <Route path="/config/*" element={<ConfigArea user={user} />} />
+          {/* Old addresses (bookmarks) move to Configuration. */}
+          <Route path="/admin/settings" element={<Navigate to="/config/collection" replace />} />
+          <Route path="/admin/*" element={<Navigate to={path.replace(/^\/admin/, "/config")} replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
+    </div>
+  );
+}
+
+const CONFIG_SECTIONS: { group: string; items: { to: string; label: string }[] }[] = [
+  { group: "Scale sites", items: [
+    { to: "/config/sites", label: "Sites" },
+    { to: "/config/profiles", label: "Mapping profiles" },
+  ] },
+  { group: "Statistics", items: [
+    { to: "/config/collection", label: "Collection & metrics" },
+    { to: "/config/public", label: "Public page" },
+  ] },
+  { group: "Access", items: [
+    { to: "/config/users", label: "Users" },
+    { to: "/config/sign-in", label: "Sign-in & LDAP" },
+  ] },
+];
+
+/** Every setting in one place, with a side menu. */
+function ConfigArea({ user }: { user: User }) {
+  return (
+    <div className="config">
+      <nav className="config-nav" aria-label="Configuration">
+        <h2 className="config-title">Configuration</h2>
+        {CONFIG_SECTIONS.map((g) => (
+          <div key={g.group} className="config-group">
+            <div className="config-group-label">{g.group}</div>
+            {g.items.map((i) => <NavLink key={i.to} to={i.to}>{i.label}</NavLink>)}
+          </div>
+        ))}
+      </nav>
+      <div className="config-body">
+        <Routes>
+          <Route path="sites" element={<SiteList />} />
+          <Route path="sites/new" element={<NewSite />} />
+          <Route path="sites/:id" element={<SiteDetail />} />
+          <Route path="profiles" element={<ProfileList />} />
+          <Route path="profiles/:id" element={<ProfileEdit />} />
+          <Route path="collection" element={<CollectionSettings />} />
+          <Route path="public" element={<PublicSettings />} />
+          <Route path="users" element={<UsersPage me={user} />} />
+          <Route path="sign-in" element={<LdapSettingsPage />} />
+          <Route path="*" element={<Navigate to="/config/sites" replace />} />
+        </Routes>
+      </div>
     </div>
   );
 }
@@ -58,7 +103,7 @@ function SiteList() {
     <>
       <div className="page-head">
         <h2>Sites</h2>
-        <Link className="button" to="/admin/sites/new">Add site</Link>
+        <Link className="button" to="/config/sites/new">Add site</Link>
       </div>
       {error ? <Notice kind="error">{error}</Notice> : null}
       {sites && !sites.length ? (
@@ -82,7 +127,7 @@ function SiteList() {
             <tbody>
               {shown.map((s) => (
                 <tr key={s.id} className={s.archived ? "archived" : ""}>
-                  <td><Link to={`/admin/sites/${s.id}`}>{s.name}</Link></td>
+                  <td><Link to={`/config/sites/${s.id}`}>{s.name}</Link></td>
                   <td>{s.code}</td>
                   <td><StatusBadge site={s} /></td>
                   <td title={s.last_error?.cause ?? ""}>
@@ -93,7 +138,7 @@ function SiteList() {
                   <td>{s.host}:{s.port}</td>
                   <td>{s.show_on_dashboard ? "Shown" : "Hidden"}</td>
                   <td>{s.show_on_public ? "Shown" : "Hidden"}</td>
-                  <td><Link className="button secondary small-button" to={`/admin/sites/${s.id}`}>Edit</Link></td>
+                  <td><Link className="button secondary small-button" to={`/config/sites/${s.id}`}>Edit</Link></td>
                 </tr>
               ))}
             </tbody>
@@ -116,7 +161,7 @@ function NewSite() {
   return (
     <>
       <h2>Add site</h2>
-      <SiteForm onSaved={(s) => nav(`/admin/sites/${s.id}`)} />
+      <SiteForm onSaved={(s) => nav(`/config/sites/${s.id}`)} />
     </>
   );
 }
@@ -149,7 +194,7 @@ function SiteDetail() {
         <h2>
           {site.name} <span className="muted">({site.code})</span> <StatusBadge site={site} />
         </h2>
-        <Link to="/admin/sites">All sites</Link>
+        <Link to="/config/sites">All sites</Link>
       </div>
       {message ? <Notice kind={message.kind}>{message.text}</Notice> : null}
       {site.archived ? (
@@ -190,7 +235,7 @@ function SiteDetail() {
       <section className="card danger-zone">
         <h3>Archive or delete</h3>
         <ArchiveControls site={site} onChange={(s, text) => updated(s, text)} onError={failed} />
-        <DeleteSite site={site} onDeleted={() => nav("/admin/sites")} onError={failed} />
+        <DeleteSite site={site} onDeleted={() => nav("/config/sites")} onError={failed} />
       </section>
     </>
   );
@@ -336,14 +381,53 @@ function DeleteSite(props: { site: Site; onDeleted: () => void; onError: (e: unk
   );
 }
 
-function SettingsPage() {
+const COLLECTION_FIELDS = ["threshold_green_max_min", "threshold_yellow_max_min", "poll_interval_s", "recent_window_min",
+  "open_ticket_cutoff_hours", "duration_ceiling_hours", "backfill_default_days"] as const;
+
+function CollectionSettings() {
   const [saved, setSaved] = useState(false);
   return (
     <>
-      <h2>Defaults for all sites</h2>
+      <h2>Collection & metrics</h2>
+      <p className="muted">Defaults for every site: how often sites are polled, the time-on-site colour limits, and the
+        rules the statistics use.</p>
       {saved ? <Notice kind="ok">Saved.</Notice> : null}
       <section className="card">
-        <DefaultsForm onSaved={() => setSaved(true)} />
+        <DefaultsForm fields={[...COLLECTION_FIELDS]} onSaved={() => setSaved(true)} />
+      </section>
+    </>
+  );
+}
+
+function PublicSettings() {
+  const [saved, setSaved] = useState(false);
+  const [sites, setSites] = useState<Site[] | null>(null);
+  useEffect(() => { api.listSites().then(setSites).catch(() => setSites([])); }, []);
+  const shown = (sites ?? []).filter((s) => s.show_on_public && !s.archived);
+  return (
+    <>
+      <div className="page-head">
+        <h2>Public page</h2>
+        <a className="button secondary" href="/public/" target="_blank" rel="noopener">Open the public page ↗</a>
+      </div>
+      <p className="muted">
+        The farmer-facing wait-times page and its JSON feed. It is reachable inside your network at
+        <code>/public/</code>; publishing it to the internet is a separate step (see the README).
+      </p>
+      {saved ? <Notice kind="ok">Saved.</Notice> : null}
+      <section className="card">
+        <h3>When to hold back a number</h3>
+        <DefaultsForm fields={["public_min_trucks", "public_stale_after_min"]} onSaved={() => setSaved(true)} />
+      </section>
+      <section className="card">
+        <h3>Sites on the public page</h3>
+        {sites == null ? <p className="muted">Loading…</p> : shown.length ? (
+          <ul>
+            {shown.map((s) => (
+              <li key={s.id}><Link to={`/config/sites/${s.id}`}>{s.name}</Link>{s.hours ? "" : <span className="muted"> (no operating hours set)</span>}</li>
+            ))}
+          </ul>
+        ) : <p className="muted">No sites yet. Turn on <strong>Public page</strong> on a site's page under Sites.</p>}
       </section>
     </>
   );

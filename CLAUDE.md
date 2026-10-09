@@ -57,6 +57,17 @@ elevators. See README.md for install, services and deployment notes.
   dashboards (filters + widget list, JSONB). The web dashboard
   (`web/src/pages/Dashboard.tsx`) draws charts with the hand-written SVG kit
   in `web/src/charts/charts.tsx` (no chart library; one y-axis per chart).
+- Sign-in: `api/routes_setup.login` checks local accounts first (break-glass
+  admin always works), then LDAP if enabled (`common/ldap_auth.py`, settings in
+  `app_settings["ldap"]`, service-account password Fernet-encrypted and
+  write-only). Directory users get `users` rows with `auth_source='ldap'`, no
+  password, role from groups at every sign-in; a local account is never taken
+  over. Never allow an empty LDAP password (anonymous bind). Admin pages:
+  `api/routes_auth_admin.py` (`/api/settings/ldap`, `/api/admin/users`).
+- The web admin UI lives under **Configuration** (`/config/*`, side menu in
+  `pages/Admin.tsx`): Sites, Mapping profiles, Collection & metrics, Public
+  page, Users, Sign-in & LDAP. Put new settings there, not in new top-level
+  menus.
 - Code: `backend/graintime/{common,api,collector}`, `backend/migrations`,
   `web/src`. The setup wizard and the admin panel share `SiteForm`,
   `DiscoveryPanel` and `DefaultsForm`, so the first site is registered through
@@ -114,11 +125,14 @@ docker compose up -d --build                 # full stack, then open :8080
 cd backend && TEST_DATABASE_URL=postgresql+psycopg://u:p@host:5432/graintime_test pytest
 # optional SQL Server integration test: MSSQL_TEST_HOST/PORT/DATABASE/USER/PASSWORD
 # optional mock GMS end-to-end test: GMS_TEST_HOST, GMS_TEST_SA_PASSWORD
+# optional real LDAP tests: LDAP_TEST_URL (+ LDAP_TEST_CA, LDAP_TEST_BASE), seeded
+#   with docs/dev/ldap-test-seed.ldif
 docker compose --profile mock up -d --build  # dev stack with a mock CompuWeigh GMS site
 cd web && npm run build                      # typecheck + build; commit web/dist
 ```
 
 Tests cover the setup flow and first-run window, the admin role on every admin
 route (walked automatically), password encryption, write-only passwords and
-absence from logs, audit entries, collector job handling, and each Test
-connection failure cause.
+absence from logs, audit entries, collector job handling, each Test
+connection failure cause, LDAP sign-in (roles from groups, local precedence,
+failure causes) and user management.
