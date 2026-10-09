@@ -189,8 +189,9 @@ LEVELS = {"good": ("Short", "✓"), "warning": ("Moderate", "!"), "critical": ("
 BRAND = "Mercer Landmark"
 
 FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E"
-           "%3Crect width='32' height='32' rx='7' fill='%231f4d2b'/%3E%3Cpath d='M9 24V13l7-5 7 5v11h-4v-6h-6v6z' "
+           "%3Crect width='32' height='32' rx='7' fill='%23ee3324'/%3E%3Cpath d='M7 24V9h4l5 8 5-8h4v15h-4v-8l-5 7-5-7v8z' "
            "fill='%23fff'/%3E%3C/svg%3E")
+LOGO = (Path(__file__).parent / "static" / "logo.png").read_bytes()
 
 # Inline icons (no external requests; the CSP allows none).
 ICON_PIN = ('<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 '
@@ -203,16 +204,16 @@ ICON_TRUCK = ('<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3
               'r="1.8" fill="currentColor"/><circle cx="17" cy="17.5" r="1.8" fill="currentColor"/></svg>')
 
 CSS = """
-:root{--bg:#f3f4f1;--card:#fff;--text:#18201b;--muted:#5b665f;--faint:#8a948d;--border:#dfe3dd;
---brand:#1f4d2b;--brand-2:#2f6b3a;--brand-ink:#fff;--accent:#2f6b3a;
+:root{--bg:#f4f4f3;--card:#fff;--text:#1b1b1d;--muted:#5c5c63;--faint:#8b8b92;--border:#e2e2e0;
+--red:#ee3324;--red-ink:#b5201a;--charcoal:#1d1d20;--charcoal-2:#2c2c31;--accent:#b5201a;
 --good:#0ca30c;--warning:#e09c00;--critical:#d03b3b;
---good-bg:#e6f4e6;--warning-bg:#fdf3dc;--critical-bg:#fbe7e7;--neutral-bg:#eef0ec;
+--good-bg:#e6f4e6;--warning-bg:#fdf3dc;--critical-bg:#fbe7e7;--neutral-bg:#efefed;
 --zone-good:#bfe3bf;--zone-warning:#f7dd9c;--zone-critical:#f1b9b9;
---shadow:0 1px 2px rgb(16 24 18/.06),0 4px 16px rgb(16 24 18/.06);color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#111512;--card:#1a1f1b;--text:#e8ede9;--muted:#a3ada6;
---faint:#7c867f;--border:#2c342e;--brand:#173a21;--brand-2:#245730;--accent:#6dbb7d;
+--shadow:0 1px 2px rgb(20 20 24/.06),0 4px 16px rgb(20 20 24/.07);color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#121214;--card:#1c1c1f;--text:#ececee;--muted:#a6a6ad;
+--faint:#7d7d85;--border:#2e2e33;--charcoal:#0b0b0c;--charcoal-2:#18181b;--accent:#ff6b5e;
 --good:#3fbf3f;--warning:#f0b429;--critical:#ec6a6a;
---good-bg:#17301b;--warning-bg:#33290f;--critical-bg:#3a1b1b;--neutral-bg:#232924;
+--good-bg:#17301b;--warning-bg:#33290f;--critical-bg:#3a1b1b;--neutral-bg:#26262a;
 --zone-good:#1f4d26;--zone-warning:#5a4613;--zone-critical:#5c2525;--shadow:none;color-scheme:dark}}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -220,12 +221,18 @@ body{margin:0;background:var(--bg);color:var(--text);
 font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
 a{color:var(--accent)}
 .wrap{max-width:1080px;margin:0 auto;padding:0 16px}
-header.top{background:linear-gradient(135deg,var(--brand),var(--brand-2));color:var(--brand-ink);padding:22px 0 54px}
+/* The logo has black lettering, so its band stays white in dark mode too. */
+.masthead{background:#fff;border-bottom:4px solid var(--red);position:relative}
+.masthead::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:3px;background:#111}
+.masthead .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:12px;padding-bottom:12px}
+.logo{display:block;height:64px;width:auto}
+.masthead .tag{font-size:.78rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#4a4a50}
+header.top{background:linear-gradient(160deg,var(--charcoal),var(--charcoal-2));color:#fff;padding:30px 0 58px;margin-top:3px}
 .top .wrap{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
-.brand{font-size:.75rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;opacity:.85}
-h1{font-size:clamp(1.5rem,4.5vw,2.1rem);line-height:1.15;margin:4px 0 0;font-weight:750;letter-spacing:-.01em}
-.live{display:inline-flex;align-items:center;gap:8px;background:rgb(255 255 255/.12);
-border:1px solid rgb(255 255 255/.22);border-radius:999px;padding:6px 12px;font-size:.85rem;white-space:nowrap}
+.kicker{font-size:.75rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#ff8a7f}
+h1{font-size:clamp(1.55rem,4.6vw,2.2rem);line-height:1.15;margin:4px 0 0;font-weight:750;letter-spacing:-.01em}
+.live{display:inline-flex;align-items:center;gap:8px;background:rgb(255 255 255/.08);
+border:1px solid rgb(255 255 255/.2);border-radius:999px;padding:6px 12px;font-size:.85rem;white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;background:#7ee08a;box-shadow:0 0 0 3px rgb(126 224 138/.25)}
 main.wrap{margin-top:-34px;padding-bottom:40px}
 .summary{background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);
@@ -233,6 +240,7 @@ display:flex;flex-wrap:wrap;gap:0;margin-bottom:18px;overflow:hidden}
 .summary>div{flex:1 1 160px;padding:14px 18px;border-right:1px solid var(--border)}
 .summary>div:last-child{border-right:none}
 .summary .k{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:650}
+.summary{border-top:3px solid var(--red)}
 .summary .v{font-size:1.15rem;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
 .summary .v small{font-weight:500;color:var(--muted);font-size:.85rem}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
@@ -287,9 +295,9 @@ color:var(--muted);box-shadow:var(--shadow)}
 footer{border-top:1px solid var(--border);margin-top:22px;padding-top:16px;font-size:.82rem;color:var(--muted);
 display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 footer p{margin:0;max-width:640px}
-@media (max-width:420px){.big{font-size:2.25rem}.stat.trucks .big{font-size:1.7rem}.summary>div{flex-basis:50%;border-bottom:1px solid var(--border)}
+@media (max-width:420px){.logo{height:46px}.masthead .tag{display:none}.big{font-size:2.25rem}.stat.trucks .big{font-size:1.7rem}.summary>div{flex-basis:50%;border-bottom:1px solid var(--border)}
 .summary>div:nth-child(2n){border-right:none}}
-@media print{header.top{background:none;color:#000;padding:0}.live{border-color:#999}.site,.summary{box-shadow:none}}
+@media print{header.top{background:none;color:#000;padding:0}.kicker{color:#000}.live{border-color:#999}.site,.summary{box-shadow:none}}
 """
 
 
@@ -398,13 +406,17 @@ def render(views: list[dict], now: datetime, unavailable: bool) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="60">
 <meta name="description" content="Current truck time on site at {e(BRAND)} grain elevators, updated every minute.">
-<meta name="theme-color" content="#1f4d2b">
+<meta name="theme-color" content="#ffffff">
 <link rel="icon" href="{FAVICON}">
 <title>Grain Elevator Wait Times · {e(BRAND)}</title>
 <style>{CSS}</style></head>
 <body>
+<div class="masthead"><div class="wrap">
+<img class="logo" src="logo.png" alt="{e(BRAND)}" width="565" height="212">
+<span class="tag">Grain elevators</span>
+</div></div>
 <header class="top"><div class="wrap">
-<div><div class="brand">{e(BRAND)}</div><h1>Grain elevator wait times</h1></div>
+<div><div class="kicker">Live from the scales</div><h1>Grain elevator wait times</h1></div>
 <div class="live" role="status"><span class="dot" aria-hidden="true"></span>Live · updated {e(fmt_time(now, now))}</div>
 </div></header>
 <main class="wrap">
@@ -435,7 +447,7 @@ SECURITY_HEADERS = {
 async def guard(request: Request, call_next):
     if request.method not in ("GET", "HEAD"):
         resp: Response = PlainTextResponse("Method not allowed", status_code=405, headers={"Allow": "GET, HEAD"})
-    elif request.url.path != "/healthz" and not limiter.allow(client_key(request)):
+    elif request.url.path not in ("/healthz", "/logo.png") and not limiter.allow(client_key(request)):
         resp = PlainTextResponse("Too many requests. Please wait a minute.", status_code=429,
                                  headers={"Retry-After": "30"})
     else:
@@ -473,6 +485,11 @@ def feed():
 def healthz():
     snapshot.get()
     return PlainTextResponse("ok" if snapshot.ok else "database unavailable", status_code=200 if snapshot.ok else 503)
+
+
+@app.get("/logo.png")
+def logo():
+    return Response(LOGO, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/robots.txt")

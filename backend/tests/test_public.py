@@ -255,3 +255,12 @@ def test_admin_sets_and_clears_site_hours(admin_client):
     bad = admin_client.patch(f"/api/admin/sites/{sid}", json={"hours": {"weekly": WEEK[:6]}})
     assert bad.status_code == 422
     assert admin_client.patch(f"/api/admin/sites/{sid}", json={"hours": None}).json()["hours"] is None
+
+
+def test_logo_is_served_and_used(pub):
+    c, mod = pub
+    r = c.get("/logo.png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n" and "max-age" in r.headers["cache-control"]
+    page = c.get("/").text
+    assert 'src="logo.png"' in page and 'alt="Mercer Landmark"' in page    # relative, works under /public/
