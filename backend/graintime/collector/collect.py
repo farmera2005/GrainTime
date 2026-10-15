@@ -17,23 +17,13 @@ from __future__ import annotations
 import time
 from datetime import date, datetime, timedelta
 
-from ..common.normalize import Lookups, raw_key
+from ..common.normalize import Lookups
 from ..common.profiles import ProfileConfig
 from ..common.tickets_store import upsert_tickets
-from .mapping import SiteReader, local_now, window_bounds
+from .mapping import (MappingError, SiteReader, classify_mapping_error, read_poll_rows,  # noqa: F401
+                      read_preview_rows)
 
-NEW_PAGES_PER_POLL = 4          # up to 4 x 500 new tickets per poll, then continue next poll
 BACKFILL_PAUSE_S = 1.0
-RECHECK_PAUSE_S = 0.5
-
-
-class MappingError(Exception):
-    def __init__(self, code: str, cause: str, fix: str):
-        super().__init__(cause)
-        self.code, self.cause, self.fix = code, cause, fix
-
-    def as_dict(self) -> dict:
-        return {"code": self.code, "cause": self.cause, "fix": self.fix}
 
 
 def _iso(v):
@@ -42,28 +32,6 @@ def _iso(v):
 
 def serialize(t: dict) -> dict:
     return {k: _iso(v) for k, v in t.items()}
-
-
-def classify_mapping_error(exc: Exception) -> MappingError:
-    """SQL errors from a wrong profile (bad table/column, missing permission)."""
-    msg = str(exc)
-    low = msg.lower()
-    if "invalid object name" in low or "(208)" in low:
-        return MappingError("mapping_table_missing", "A table in the mapping profile does not exist",
-                            f"Check the table names in the mapping profile. Driver: {msg[:300]}")
-    if "invalid column name" in low or "(207)" in low:
-        return MappingError("mapping_column_missing", "A column in the mapping profile does not exist",
-                            f"Check the column names in the mapping profile. Driver: {msg[:300]}")
-    if "select permission was denied" in low or "(229)" in low or "(230)" in low:
-        return MappingError("permission_denied",
-                            "The SQL login is missing SELECT permission on a mapped table or column",
-                            "Run the read-only login script from the mapping profile page at the "
-                            f"site. Driver: {msg[:300]}")
-    if "timeout" in low or "timed out" in low:
-        return MappingError("query_timeout", "A query took longer than 15 seconds",
-                            "The site database may be busy; GrainTime will retry with back-off. "
-                            f"Driver: {msg[:300]}")
-    return MappingError("query_failed", "Reading tickets failed", msg[:500])
 
 
 # --------------------------------------------------------------------------- #
@@ -76,40 +44,8 @@ def poll(conn, profile: ProfileConfig, high_water, lookups: Lookups | None,
     reader = SiteReader(conn, profile)
     try:
         lookups = lookups or reader.lookups()
-        rows: list[dict] = []
-        new_hwm = high_water
-        if high_water is None:
-            top = reader.max_high_water()
-            new_hwm = raw_key(top) if top is not None else None
-        else:
-            after = high_water
-            for _ in range(NEW_PAGES_PER_POLL):
-                page = reader.new_rows(after)
-                rows += page
-                if page:
-                    after = raw_key(page[-1][profile.high_water_column])
-                    new_hwm = after
-                if len(page) < 500:
-                    break
-        created_since, completed_since = window_bounds(profile)
-        rows += reader.window_rows(created_since, completed_since)
-        rechecked = 0
-        if recheck and profile.nightly_recheck_days > 0:
-            today = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
-            for d in range(profile.nightly_recheck_days, 0, -1):
-                day = today - timedelta(days=d)
-                got = reader.created_range(day, day + timedelta(days=1))
-                rechecked += len(got)
-                rows += got
-                time.sleep(RECHECK_PAUSE_S)
-        # De-duplicate (the same ticket can come from several queries)
-        seen, unique = set(), []
-        for r in rows:
-            k = raw_key(r[profile.id_column])
-            if k not in seen:
-                seen.add(k)
-                unique.append(r)
-        tickets, merged = reader.normalize_rows(unique, lookups)
+        got = read_poll_rows(reader, high_water, recheck)
+        tickets, merged = reader.normalize_rows(got["rows"], lookups)
     except MappingError:
         raise
     except Exception as exc:
@@ -117,8 +53,8 @@ def poll(conn, profile: ProfileConfig, high_water, lookups: Lookups | None,
         if isinstance(exc, SiteConnectionError):
             raise
         raise classify_mapping_error(exc) from None
-    return {"tickets": tickets, "high_water": new_hwm, "lookups": lookups,
-            "rows_read": len(unique), "merged": merged, "rechecked": rechecked}
+    return {"tickets": tickets, "high_water": got["high_water"], "lookups": lookups,
+            "rows_read": len(got["rows"]), "merged": merged, "rechecked": got["rechecked"]}
 
 
 # --------------------------------------------------------------------------- #
@@ -133,23 +69,25 @@ def preview(conn, profile: ProfileConfig, options: dict) -> dict:
     reader = SiteReader(conn, profile)
     try:
         lookups = reader.lookups()
-        rows = reader.recent_rows(limit)
-        tickets, merged = reader.normalize_rows(rows, lookups)
-        examples = {}
-        check = [k for k, v in profile.status_map.items() if v not in ("open", "completed")]
-        for raw in check:
-            ex_rows = reader.status_examples(raw, 5)
-            ex, _ = reader.normalize_rows(ex_rows, lookups)
-            examples[raw] = [serialize(t) for t in ex]
+        got = read_preview_rows(reader, limit)
+        tickets, merged = reader.normalize_rows(got["rows"], lookups)
+        examples = {raw: reader.normalize_rows(rows, lookups)[0]
+                    for raw, rows in got["status_examples"].items()}
     except Exception as exc:
         from .sitedb import SiteConnectionError
         if isinstance(exc, (SiteConnectionError, MappingError)):
             raise
         raise classify_mapping_error(exc) from None
+    return preview_result(tickets, merged, examples, lookups)
+
+
+def preview_result(tickets: list[dict], merged: int, examples: dict[str, list[dict]],
+                   lookups: Lookups) -> dict:
+    """The Preview data report (shared with agent sites, normalized on the server)."""
     included = [t for t in tickets if t["included"]]
     return {
         "tickets": [serialize(t) for t in tickets],
-        "status_examples": examples,
+        "status_examples": {raw: [serialize(t) for t in ex] for raw, ex in examples.items()},
         "summary": {
             "read": len(tickets) + merged, "included": len(included), "merged_split_tickets": merged,
             "not_tracked": len(tickets) - len(included),
@@ -158,6 +96,7 @@ def preview(conn, profile: ProfileConfig, options: dict) -> dict:
             "voided": sum(1 for t in included if t["status"] == "voided"),
             "unknown_status": sorted({t["raw_status"] for t in included if t["status"] == "unknown"}),
             "single_weigh": sum(1 for t in included if t["single_weigh"]),
+            "manual_weights": sum(1 for t in included if t.get("note") == "weight keyed in by hand"),
             "types": {k: v.get("code") for k, v in list(lookups.types.items())[:50]},
             "products": len(lookups.products),
         },

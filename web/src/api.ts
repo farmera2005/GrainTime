@@ -52,13 +52,14 @@ export type Site = {
   code: string;
   address: string | null;
   map_url: string | null;
-  host: string;
-  port: number;
+  source: "sql" | "agent";
+  host: string | null;
+  port: number | null;
   instance_name: string | null;
-  database: string;
+  database: string | null;
   auth_method: AuthMethod;
   domain: string | null;
-  username: string;
+  username: string | null;
   has_password: boolean;
   encrypt: Encrypt;
   trust_server_certificate: boolean;
@@ -73,6 +74,24 @@ export type Site = {
   last_error: JobError | null;
   stale: boolean;
   trucks_today: number;
+  agent: AgentStatus | null;
+};
+
+export type AgentStatus = {
+  paired: boolean;
+  pairing_pending: boolean;
+  pairing_expires_at?: string | null;
+  paired_at?: string | null;
+  last_seen_at?: string | null;
+  online?: boolean;
+  version?: string | null;
+  hostname?: string | null;
+  windows_user?: string | null;
+  instance?: "running" | "not_running" | null;
+  database?: string | null;
+  driver?: string | null;
+  error?: { code: string; cause: string; fix?: string } | null;
+  clock_skew_s?: number | null;
 };
 
 export type SiteInput = Omit<ConnectionFields, "password"> & {
@@ -118,6 +137,13 @@ export type WeighSteps = {
 export type TicketStatus = "open" | "completed" | "voided";
 
 export type ProfileConfig = {
+  weigh_pair_columns?: string[] | null;
+  direction_column?: string | null;
+  manual_columns?: string[];
+  manual_rule?: "keep" | "exclude";
+  lookback_mode?: "time" | "recent_rows";
+  lookback_rows?: number;
+  agent_database_match?: string | null;
   ticket_table: string;
   id_column: string;
   high_water_column: string;
@@ -424,4 +450,10 @@ export const api = {
     request<UserAdmin>("POST", "/api/admin/users", b),
   updateUser: (id: number, b: Partial<{ display_name: string; role: "viewer" | "admin"; is_active: boolean; password: string }>) =>
     request<UserAdmin>("PATCH", `/api/admin/users/${id}`, b),
+  createAgentSite: (b: { name: string; code: string; address?: string | null; map_url?: string | null; mapping_profile_id?: number | null }) =>
+    request<Site>("POST", "/api/admin/sites/agent", b),
+  agentStatus: (siteId: number) => request<AgentStatus>("GET", `/api/admin/sites/${siteId}/agent`),
+  agentPairingCode: (siteId: number) =>
+    request<{ code: string; expires_at: string; agent: AgentStatus }>("POST", `/api/admin/sites/${siteId}/agent/pairing-code`),
+  agentRevoke: (siteId: number) => request<AgentStatus>("POST", `/api/admin/sites/${siteId}/agent/revoke`),
 };

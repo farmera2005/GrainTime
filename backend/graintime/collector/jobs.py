@@ -92,7 +92,10 @@ class JobRunner:
         """Jobs left 'running' by a previous collector process cannot resume."""
         with self.Session() as db:
             n = db.execute(
-                update(CollectorJob).where(CollectorJob.status == "running").values(
+                update(CollectorJob).where(
+                    CollectorJob.status == "running",
+                    CollectorJob.site_id.is_(None) | CollectorJob.site_id.not_in(
+                        select(Site.id).where(Site.source == "agent"))).values(
                     status="failed", finished_at=_now(),
                     error={"code": "interrupted", "cause": "The collector restarted while this "
                            "job was running", "fix": "Run it again."},
@@ -118,8 +121,11 @@ class JobRunner:
 
     def _claim(self):
         with self.Session() as db:
+            # Jobs for agent sites are run by the GrainTime Agent on the scale PC.
+            agent_sites = select(Site.id).where(Site.source == "agent")
             jobs = db.scalars(
-                select(CollectorJob).where(CollectorJob.status == "queued")
+                select(CollectorJob).where(CollectorJob.status == "queued",
+                                           CollectorJob.site_id.is_(None) | CollectorJob.site_id.not_in(agent_sites))
                 .order_by(CollectorJob.id).limit(50).with_for_update(skip_locked=True)).all()
             for job in jobs:
                 key = job_key(job)

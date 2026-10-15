@@ -150,6 +150,22 @@ services:
     restart: unless-stopped
     logging: *logging
 
+  # Development only: a mock AgVantagePC LOCALSET database (same SQL Server),
+  # read by a GrainTime Agent you run by hand (see agent/README.md).
+  mock-agvantage:
+    profiles: ["mock"]
+    image: graintime-collector:latest
+    command: ["python", "-m", "graintime.devtools.mock_agvantage", "--days", "30", "--live"]
+    healthcheck:
+      disable: true
+    environment:
+      MOCK_SQL_HOST: mock-mssql
+      MOCK_SA_PASSWORD: "${MOCK_SA_PASSWORD:-Dev-Mock-Sa-2026!}"
+    depends_on:
+      mock-mssql: { condition: service_healthy }
+    restart: unless-stopped
+    logging: *logging
+
 networks:
   default:
   public:

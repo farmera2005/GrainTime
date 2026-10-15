@@ -17,7 +17,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from ..common import audit, crypto
-from ..common.models import CollectorJob, MappingProfile, Site, SiteCollectorState, Ticket, User
+from ..common.models import (CollectorJob, MappingProfile, Site, SiteAgent, SiteCollectorState,
+                             Ticket, User)
+from ..common.profiles import ProfileConfig
+from .agent_status import agent_summary
 from ..common import settings_store
 from ..common.normalize import SITE_TZ
 from .schemas import check_auth
@@ -39,6 +42,7 @@ def site_out(s: Site) -> SiteOut:
     return SiteOut(id=s.id, name=s.name, code=s.code, address=s.address, map_url=s.map_url,
                    host=s.host, port=s.port, instance_name=s.instance_name,
                    database=s.database_name, auth_method=s.auth_method, domain=s.domain,
+                   source=s.source,
                    username=s.username,
                    has_password=bool(s.password_encrypted), encrypt=s.encrypt,
                    trust_server_certificate=s.trust_server_certificate,
@@ -90,6 +94,7 @@ def is_stale(site: Site, state: SiteCollectorState | None, interval: int,
 def list_sites(db: DbSession = Depends(get_db)):
     sites = db.scalars(select(Site).order_by(Site.name)).all()
     states = {st.site_id: st for st in db.scalars(select(SiteCollectorState))}
+    agents = {a.site_id: a for a in db.scalars(select(SiteAgent))}
     day0 = local_day_start_utc()
     counts = dict(db.execute(
         select(Ticket.site_id, func.count()).where(Ticket.inbound_at >= day0,
@@ -104,6 +109,8 @@ def list_sites(db: DbSession = Depends(get_db)):
         o.last_error = st.last_error if st else None
         o.stale = is_stale(s, st, s.poll_interval_s or default)
         o.trucks_today = counts.get(s.id, 0)
+        if s.source == "agent":
+            o.agent = agent_summary(agents.get(s.id))
         out.append(o)
     return out
 
@@ -136,7 +143,22 @@ def create_site(body: SiteCreate, db: DbSession = Depends(get_db),
 
 @router.get("/sites/{site_id}", response_model=SiteOut)
 def get_site(site_id: int, db: DbSession = Depends(get_db)):
-    return site_out(_get_site(db, site_id))
+    site = _get_site(db, site_id)
+    o = site_out(site)
+    if site.source == "agent":
+        o.agent = agent_summary(db.get(SiteAgent, site.id))
+    return o
+
+
+CONNECTION_FIELDS = {"host", "port", "instance_name", "database", "username", "auth_method",
+                     "domain", "password", "encrypt", "trust_server_certificate"}
+
+
+def _not_agent(site: Site, what: str) -> None:
+    if site.source == "agent":
+        raise HTTPException(409, f"{what} isn't available for this site: its tickets are sent by "
+                                 "the GrainTime Agent on the scale PC. See the agent's status on "
+                                 "the site's page.")
 
 
 @router.patch("/sites/{site_id}", response_model=SiteOut)
@@ -145,6 +167,16 @@ def update_site(site_id: int, body: SiteUpdate, db: DbSession = Depends(get_db),
     site = _get_site(db, site_id)
     before = _snapshot(site)
     data = body.model_dump(exclude_unset=True)
+    if site.source == "agent":
+        if CONNECTION_FIELDS & {k for k, v in data.items() if v not in (None, "")}:
+            raise HTTPException(409, "Agent sites have no SQL Server connection to change.")
+        for k in CONNECTION_FIELDS:
+            data.pop(k, None)
+        if data.get("mapping_profile_id") is not None:
+            prof = db.get(MappingProfile, data["mapping_profile_id"])
+            why = ProfileConfig(**prof.config).agent_compatible() if prof else None
+            if why:
+                raise HTTPException(422, f"The profile {prof.name} can't be used by an agent site: {why}.")
     password = data.pop("password", None)
     if "database" in data:
         data["database_name"] = data.pop("database")
@@ -171,9 +203,10 @@ def update_site(site_id: int, body: SiteUpdate, db: DbSession = Depends(get_db),
         if k in data and isinstance(data[k], str):
             data[k] = data[k].strip() or None
     try:
-        check_auth(data.get("auth_method", site.auth_method),
-                   data["domain"] if "domain" in data else site.domain,
-                   data.get("username") or site.username, data.get("encrypt") or site.encrypt)
+        if site.source == "sql":
+            check_auth(data.get("auth_method", site.auth_method),
+                       data["domain"] if "domain" in data else site.domain,
+                       data.get("username") or site.username, data.get("encrypt") or site.encrypt)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     for k, v in data.items():
@@ -265,7 +298,7 @@ def queue_test_connection(body: TestConnectionIn, db: DbSession = Depends(get_db
                           user: User = Depends(require_admin)):
     params: dict = {}
     if body.site_id is not None:
-        _get_site(db, body.site_id)
+        _not_agent(_get_site(db, body.site_id), "Test connection")
     if body.connection is not None:
         c = body.connection
         params["connection"] = {
@@ -287,7 +320,7 @@ def queue_test_connection(body: TestConnectionIn, db: DbSession = Depends(get_db
 @router.post("/sites/{site_id}/discovery", status_code=202)
 def queue_discovery(site_id: int, body: DiscoveryIn, db: DbSession = Depends(get_db),
                     user: User = Depends(require_admin)):
-    _get_site(db, site_id)
+    _not_agent(_get_site(db, site_id), "Discovery")
     job = CollectorJob(kind="discovery", site_id=site_id, params={"options": body.model_dump()},
                        status="queued", requested_by=user.id)
     db.add(job)
@@ -361,8 +394,13 @@ def queue_preview(site_id: int, body: PreviewIn, db: DbSession = Depends(get_db)
                   user: User = Depends(require_admin)):
     site = _get_site(db, site_id)
     pid = body.profile_id or site.mapping_profile_id
-    if pid is None or db.get(MappingProfile, pid) is None:
+    prof = db.get(MappingProfile, pid) if pid is not None else None
+    if prof is None:
         raise HTTPException(409, "Choose a mapping profile first.")
+    if site.source == "agent":
+        why = ProfileConfig(**prof.config).agent_compatible()
+        if why:
+            raise HTTPException(422, f"The profile {prof.name} can't be used by an agent site: {why}.")
     job = CollectorJob(kind="preview", site_id=site_id, status="queued", requested_by=user.id,
                        params={"options": {"profile_id": pid, "limit": body.limit}})
     db.add(job)

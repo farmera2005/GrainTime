@@ -88,7 +88,8 @@ export function ProfileEdit() {
   const set = <K extends keyof ProfileConfig>(k: K, v: ProfileConfig[K]) => setCfg({ ...cfg, [k]: v });
   const txt = (k: keyof ProfileConfig) => (cfg[k] as string | null | undefined) ?? "";
   const setTxt = (k: keyof ProfileConfig) => (v: string) => set(k, (v.trim() ? v : null) as never);
-  const weighMode = cfg.weigh_steps ? "steps" : "columns";
+  const weighMode = cfg.weigh_steps ? "steps" : cfg.weigh_pair_columns ? "pair" : "columns";
+  const pair = cfg.weigh_pair_columns ?? ["", ""];
 
   const save = async (ev?: FormEvent, confirm = false) => {
     ev?.preventDefault();
@@ -178,25 +179,43 @@ export function ProfileEdit() {
 
         <Section title="Weigh times" hint="Time on site = outbound weigh − inbound weigh.">
           <div className="radio-row">
-            <label className="check"><input type="radio" checked={weighMode === "steps"} onChange={() => setCfg({ ...cfg, inbound_column: null, outbound_column: null, weigh_steps: cfg.weigh_steps ?? { table: "", ticket_fk_column: "", time_column: "", weight_type_column: "" } })} /> From a table of weigh steps (CompuWeigh GMS: TransactionLog)</label>
-            <label className="check"><input type="radio" checked={weighMode === "columns"} onChange={() => setCfg({ ...cfg, weigh_steps: null })} /> From inbound and outbound time columns on the ticket table</label>
+            <label className="check"><input type="radio" checked={weighMode === "steps"} onChange={() => setCfg({ ...cfg, inbound_column: null, outbound_column: null, weigh_pair_columns: null, weigh_steps: cfg.weigh_steps ?? { table: "", ticket_fk_column: "", time_column: "", weight_type_column: "" } })} /> From a table of weigh steps (CompuWeigh GMS: TransactionLog)</label>
+            <label className="check"><input type="radio" checked={weighMode === "pair"} onChange={() => setCfg({ ...cfg, weigh_steps: null, inbound_column: null, outbound_column: null, weigh_pair_columns: ["", ""] })} /> From two weigh time columns, the earlier being the inbound weigh (AgVantage: gross and tare dates)</label>
+            <label className="check"><input type="radio" checked={weighMode === "columns"} onChange={() => setCfg({ ...cfg, weigh_steps: null, weigh_pair_columns: null })} /> From inbound and outbound time columns on the ticket table</label>
           </div>
           {cfg.weigh_steps ? (
             <WeighStepsEditor value={cfg.weigh_steps} onChange={(w) => set("weigh_steps", w)} />
+          ) : weighMode === "pair" ? (
+            <div className="grid">
+              <Text label="First weigh time column" hint="e.g. st_grsdate (gross)" value={pair[0]} onChange={(v) => set("weigh_pair_columns", [v, pair[1]])} />
+              <Text label="Second weigh time column" hint="e.g. st_tardate (tare)" value={pair[1]} onChange={(v) => set("weigh_pair_columns", [pair[0], v])} />
+            </div>
           ) : (
             <div className="grid">
               <Text label="Inbound weigh time column" value={txt("inbound_column")} onChange={setTxt("inbound_column")} />
               <Text label="Outbound weigh time column" value={txt("outbound_column")} onChange={setTxt("outbound_column")} />
             </div>
           )}
+          <div className="grid">
+            <Text label="Hand-keyed weight flag columns (optional)" hint="Comma-separated, e.g. st_grsmanual, st_tarmanual"
+              value={(cfg.manual_columns ?? []).join(", ")}
+              onChange={(v) => set("manual_columns", v.split(",").map((x) => x.trim()).filter(Boolean))} />
+            <label className="field"><span className="field-label">Tickets with a hand-keyed weight</span>
+              <select value={cfg.manual_rule ?? "keep"} onChange={(e) => set("manual_rule", e.target.value as "keep" | "exclude")}>
+                <option value="keep">Keep them in the statistics</option>
+                <option value="exclude">Leave them out (and count them), like stored tares</option>
+              </select>
+            </label>
+          </div>
           {errors.config ? <Notice kind="error">{errors.config}</Notice> : null}
         </Section>
 
         <Section title="Transaction type and direction" hint="Which ticket types to track, and which are received vs shipped.">
           <div className="grid">
             <Text label="Type column on the ticket table" value={txt("type_column")} onChange={setTxt("type_column")} />
+            <Text label="Direction column on the ticket table (optional)" hint="When direction is on the ticket itself, e.g. st_inout (I / O)" value={txt("direction_column")} onChange={setTxt("direction_column")} />
           </div>
-          <LookupEditor label="Type lookup table" value={cfg.type_lookup ?? null} withDirection onChange={(l) => set("type_lookup", l)} />
+          <LookupEditor label="Type lookup table (optional)" value={cfg.type_lookup ?? null} withDirection onChange={(l) => set("type_lookup", l)} />
           <MapEditor<"received" | "shipped">
             label="Direction values"
             value={cfg.direction_map}
@@ -211,20 +230,38 @@ export function ProfileEdit() {
           />
         </Section>
 
-        <Section title="Commodity" hint="Product names come from a lookup table.">
+        <Section title="Commodity" hint="Product names come from a lookup table, or straight from a name column on the ticket when there is no lookup.">
           <div className="grid">
             <Text label="Product column on the ticket table" value={txt("product_column")} onChange={setTxt("product_column")} />
           </div>
-          <LookupEditor label="Product lookup table" value={cfg.product_lookup ?? null} onChange={(l) => set("product_lookup", l)} />
+          <LookupEditor label="Product lookup table (optional)" value={cfg.product_lookup ?? null} onChange={(l) => set("product_lookup", l)} />
         </Section>
 
         <Section title="Filter and polling" hint="Optional filter for databases shared by several locations; look-back windows catch edits and voids.">
           <div className="grid">
             <Text label="Filter column (optional)" value={txt("filter_column")} onChange={setTxt("filter_column")} />
             <Text label="Filter value" value={txt("filter_value")} onChange={setTxt("filter_value")} />
-            <Num label="Re-read tickets created in the last" unit="hours" value={cfg.lookback_hours} onChange={(v) => set("lookback_hours", v)} />
-            <Num label="Re-read tickets completed in the last" unit="hours" value={cfg.completed_lookback_hours} onChange={(v) => set("completed_lookback_hours", v)} />
+            <label className="field"><span className="field-label">Each poll re-reads</span>
+              <select value={cfg.lookback_mode ?? "time"} onChange={(e) => set("lookback_mode", e.target.value as "time" | "recent_rows")}>
+                <option value="time">Tickets created or completed recently (needs indexed time columns)</option>
+                <option value="recent_rows">The newest tickets by ID (for tables without indexed time columns)</option>
+              </select>
+            </label>
+            {(cfg.lookback_mode ?? "time") === "recent_rows" ? (
+              <Num label="Newest tickets to re-read" unit="tickets" value={cfg.lookback_rows ?? 200} onChange={(v) => set("lookback_rows", v)} />
+            ) : (
+              <>
+                <Num label="Re-read tickets created in the last" unit="hours" value={cfg.lookback_hours} onChange={(v) => set("lookback_hours", v)} />
+                <Num label="Re-read tickets completed in the last" unit="hours" value={cfg.completed_lookback_hours} onChange={(v) => set("completed_lookback_hours", v)} />
+              </>
+            )}
             <Num label="Nightly re-check of the last" unit="days" value={cfg.nightly_recheck_days} onChange={(v) => set("nightly_recheck_days", v)} />
+          </div>
+        </Section>
+
+        <Section title="Agent sites" hint="Only for scale PCs read by the GrainTime Agent (AgVantagePC).">
+          <div className="grid">
+            <Text label="Database on the PC whose name ends with" hint="e.g. LOCALSET.MDF" value={txt("agent_database_match")} onChange={setTxt("agent_database_match")} />
           </div>
         </Section>
 

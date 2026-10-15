@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from .profiles import ProfileConfig
@@ -26,7 +27,13 @@ def raw_key(v) -> str:
         return "1" if v else "0"
     if isinstance(v, float) and v.is_integer():
         return str(int(v))
+    if isinstance(v, Decimal):
+        return str(int(v)) if v == v.to_integral_value() else format(v.normalize(), "f")
     return str(v).strip()
+
+
+def truthy(v) -> bool:
+    return raw_key(v) not in ("", "0", "false", "False", "N", "n")
 
 
 def to_utc(local: datetime | None, fold: int = 0) -> datetime | None:
@@ -111,15 +118,23 @@ def normalize(profile: ProfileConfig, row: dict, weighs: WeighSummary | None,
     if p.void_column and row.get(p.void_column) not in (None, 0, False, "", "0"):
         status = "voided"
 
-    type_info = lookups.types.get(raw_key(row.get(p.type_column))) if p.type_column else None
-    type_code = (type_info or {}).get("code")
+    if p.type_column and not p.type_lookup:         # type code straight from the ticket row
+        type_info, type_code = None, raw_key(row.get(p.type_column)) or None
+    else:
+        type_info = lookups.types.get(raw_key(row.get(p.type_column))) if p.type_column else None
+        type_code = (type_info or {}).get("code")
     direction = "received"
-    if type_info and p.type_lookup and p.type_lookup.direction_column:
+    if p.direction_column:
+        direction = p.direction_map.get(raw_key(row.get(p.direction_column)), "unknown")
+    elif type_info and p.type_lookup and p.type_lookup.direction_column:
         direction = p.direction_map.get(raw_key(type_info.get("direction")), "unknown")
-    prod = lookups.products.get(raw_key(row.get(p.product_column))) if p.product_column else None
     commodity = None
-    if prod:
-        commodity = (prod.get("description") or prod.get("code") or "").strip() or None
+    if p.product_column and not p.product_lookup:   # commodity name straight from the row
+        commodity = raw_key(row.get(p.product_column)) or None
+    else:
+        prod = lookups.products.get(raw_key(row.get(p.product_column))) if p.product_column else None
+        if prod:
+            commodity = (prod.get("description") or prod.get("code") or "").strip() or None
 
     single_weigh = False
     if p.weigh_steps is not None:
@@ -135,11 +150,23 @@ def normalize(profile: ProfileConfig, row: dict, weighs: WeighSummary | None,
             inbound_at = outbound_at = None
         # Completed with only one kind of weight (gross or tare): stored tare.
         single_weigh = status == "completed" and len(groups) < 2
+    elif p.weigh_pair_columns:
+        a, b = (row.get(c) for c in p.weigh_pair_columns)
+        if a is not None and b is not None and a != b:
+            inbound_at, outbound_at = _two_weigh_pair((a, a), (b, b))
+        else:
+            inbound_at, outbound_at = pair_to_utc(a if a is not None else b, None)
+        single_weigh = status == "completed" and (a is None or b is None or a == b)
     else:
         in_local, out_local = row.get(p.inbound_column), row.get(p.outbound_column)
         single_weigh = status == "completed" and (in_local is None or out_local is None
                                                   or in_local == out_local)
         inbound_at, outbound_at = pair_to_utc(in_local, out_local)
+    note_manual = None
+    if p.manual_columns and any(truthy(row.get(c)) for c in p.manual_columns):
+        note_manual = "weight keyed in by hand"
+        if p.manual_rule == "exclude" and status == "completed":
+            single_weigh = True                     # excluded and counted, like a stored tare
     duration = None
     if inbound_at and outbound_at and not single_weigh:
         duration = int((outbound_at - inbound_at).total_seconds())
@@ -151,6 +178,8 @@ def normalize(profile: ProfileConfig, row: dict, weighs: WeighSummary | None,
         included, note = False, f"type {type_code or '?'} not tracked"
     elif p.filter_column and raw_key(row.get(p.filter_column)) != raw_key(p.filter_value):
         included, note = False, "outside the profile filter"
+    elif note_manual:
+        note = note_manual
 
     created = row.get(p.created_column)
     return {
@@ -199,5 +228,26 @@ def ceiling_excluded(duration_s: int | None, ceiling_hours: float) -> bool:
     return duration_s is not None and duration_s > ceiling_hours * 3600
 
 
-__all__ = ["normalize", "resolve_families", "pair_to_utc", "to_utc", "WeighSummary", "Lookups",
+def decode_rows(profile: ProfileConfig, rows: list[dict]) -> list[dict]:
+    """Rows uploaded by an agent arrive as JSON: local date/times as ISO text.
+    Turn the profile's time columns back into naive datetimes; keep only the
+    profile's columns (anything else an agent sent is dropped)."""
+    keep = set(profile.ticket_columns())
+    times = set(profile.time_columns())
+    out = []
+    for r in rows:
+        d = {}
+        for k, v in r.items():
+            if k not in keep:
+                continue
+            if k in times and isinstance(v, str) and v:
+                v = datetime.fromisoformat(v)
+                if v.tzinfo is not None:
+                    v = v.replace(tzinfo=None)
+            d[k] = v
+        out.append(d)
+    return out
+
+
+__all__ = ["normalize", "decode_rows", "truthy", "resolve_families", "pair_to_utc", "to_utc", "WeighSummary", "Lookups",
            "raw_key", "ceiling_excluded", "SITE_TZ"]

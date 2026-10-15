@@ -1,0 +1,45 @@
+# Builds GrainTimeAgent.exe (the agent for AgVantagePC scale PCs) on Windows,
+# after testing the Windows-only parts (DPAPI, time zones, sign-in start-up).
+# Download the .exe from the run's artifacts.
+name: GrainTime Agent (Windows build)
+on:
+  push:
+    paths:
+      - "agent/**"
+      - "backend/graintime/common/profiles.py"
+      - "backend/graintime/common/normalize.py"
+      - "backend/graintime/collector/mapping.py"
+      - ".github/workflows/agent.yml"
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}\backend;${{ github.workspace }}\agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -r agent/requirements.txt pyinstaller==6.22.3 pytest==9.1.1
+      - name: Windows checks
+        run: python -m pytest agent/tests -q
+      - name: Build GrainTimeAgent.exe
+        run: >
+          pyinstaller --onefile --windowed --noconfirm --name GrainTimeAgent
+          --paths backend --paths agent --collect-data tzdata
+          --hidden-import graintime_agent.ui
+          agent/run_agent.py
+      - name: Self-test the built .exe
+        shell: pwsh
+        run: |
+          $env:GRAINTIME_AGENT_HOME = "$env:RUNNER_TEMP\gta"
+          $p = Start-Process dist\GrainTimeAgent.exe -ArgumentList "selftest" -Wait -PassThru
+          Get-Content "$env:GRAINTIME_AGENT_HOME\selftest.txt"
+          if ($p.ExitCode -ne 0) { throw "selftest failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GrainTimeAgent
+          path: dist/GrainTimeAgent.exe
+          if-no-files-found: error

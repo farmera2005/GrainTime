@@ -8,17 +8,51 @@ already READ UNCOMMITTED with lock and command timeouts (sitedb.connect).
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from ..common.normalize import (SITE_TZ, Lookups, WeighSummary, normalize, raw_key,
                                 resolve_families)
 from ..common.profiles import ProfileConfig
 
 NEW_ROWS_LIMIT = 500
+NEW_PAGES_PER_POLL = 4          # up to 4 x 500 new tickets per poll, then continue next poll
+NIGHTLY_RECENT_ROWS = 2000      # recent_rows profiles: nightly re-read of the newest N tickets
+RECHECK_PAUSE_S = 0.5
 WINDOW_LIMIT = 2000
 RANGE_LIMIT = 2000
 WEIGH_BATCH = 500
 PAUSE_S = 0.05
+
+
+class MappingError(Exception):
+    def __init__(self, code: str, cause: str, fix: str):
+        super().__init__(cause)
+        self.code, self.cause, self.fix = code, cause, fix
+
+    def as_dict(self) -> dict:
+        return {"code": self.code, "cause": self.cause, "fix": self.fix}
+
+
+def classify_mapping_error(exc: Exception) -> MappingError:
+    """SQL errors from a wrong profile (bad table/column, missing permission)."""
+    msg = str(exc)
+    low = msg.lower()
+    if "invalid object name" in low or "(208)" in low:
+        return MappingError("mapping_table_missing", "A table in the mapping profile does not exist",
+                            f"Check the table names in the mapping profile. Driver: {msg[:300]}")
+    if "invalid column name" in low or "(207)" in low:
+        return MappingError("mapping_column_missing", "A column in the mapping profile does not exist",
+                            f"Check the column names in the mapping profile. Driver: {msg[:300]}")
+    if "select permission was denied" in low or "(229)" in low or "(230)" in low:
+        return MappingError("permission_denied",
+                            "The SQL login is missing SELECT permission on a mapped table or column",
+                            "Run the read-only login script from the mapping profile page at the "
+                            f"site. Driver: {msg[:300]}")
+    if "timeout" in low or "timed out" in low:
+        return MappingError("query_timeout", "A query took longer than 15 seconds",
+                            "The site database may be busy; GrainTime will retry with back-off. "
+                            f"Driver: {msg[:300]}")
+    return MappingError("query_failed", "Reading tickets failed", msg[:500])
 
 
 def qi(name: str) -> str:
@@ -191,3 +225,82 @@ class SiteReader:
 def window_bounds(p: ProfileConfig, now: datetime | None = None) -> tuple[datetime, datetime]:
     now = now or local_now()
     return now - timedelta(hours=p.lookback_hours), now - timedelta(hours=p.completed_lookback_hours)
+
+
+# --------------------------------------------------------------------------- #
+# Reading (shared by the collector and the GrainTime Agent; no normalization)
+# --------------------------------------------------------------------------- #
+
+def dedupe(rows: list[dict], id_column: str) -> list[dict]:
+    seen, out = set(), []
+    for r in rows:
+        k = raw_key(r[id_column])
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out
+
+
+def read_poll_rows(reader: SiteReader, high_water, recheck: bool) -> dict:
+    """The rows one incremental poll reads: new tickets after the high-water
+    mark (bounded pages), the look-back window, and the nightly re-check.
+    The first poll of a site starts the mark at the newest ticket."""
+    p = reader.p
+    rows: list[dict] = []
+    new_hwm = high_water
+    if high_water is None:
+        top = reader.max_high_water()
+        new_hwm = raw_key(top) if top is not None else None
+    else:
+        after = high_water
+        for _ in range(NEW_PAGES_PER_POLL):
+            page = reader.new_rows(after)
+            rows += page
+            if page:
+                after = raw_key(page[-1][p.high_water_column])
+                new_hwm = after
+            if len(page) < NEW_ROWS_LIMIT:
+                break
+    if p.lookback_mode == "recent_rows":
+        rows += reader.recent_rows(p.lookback_rows)
+    else:
+        created_since, completed_since = window_bounds(p)
+        rows += reader.window_rows(created_since, completed_since)
+    rechecked = 0
+    if recheck and p.nightly_recheck_days > 0:
+        if p.lookback_mode == "recent_rows":
+            got = reader.recent_rows(NIGHTLY_RECENT_ROWS)
+            rechecked += len(got)
+            rows += got
+        else:
+            today = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
+            for d in range(p.nightly_recheck_days, 0, -1):
+                day = today - timedelta(days=d)
+                got = reader.created_range(day, day + timedelta(days=1))
+                rechecked += len(got)
+                rows += got
+                time.sleep(RECHECK_PAUSE_S)
+    return {"rows": dedupe(rows, p.id_column), "high_water": new_hwm, "rechecked": rechecked}
+
+
+def read_preview_rows(reader: SiteReader, limit: int) -> dict:
+    """The newest tickets, plus up to 5 examples of each status value that is
+    not open/completed (so its meaning can be checked in the scale software)."""
+    p = reader.p
+    examples = {raw: reader.status_examples(raw, 5)
+                for raw, v in p.status_map.items() if v not in ("open", "completed")}
+    return {"rows": reader.recent_rows(limit), "status_examples": examples}
+
+
+def encode_value(v):
+    """JSON form of a raw column value (agent uploads)."""
+    from decimal import Decimal
+    if isinstance(v, datetime):
+        return (v.astimezone(timezone.utc).replace(tzinfo=None) if v.tzinfo else v).isoformat()
+    if isinstance(v, Decimal):
+        return int(v) if v == v.to_integral_value() else float(v)
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return None
+    if isinstance(v, str):
+        return v.strip()
+    return v

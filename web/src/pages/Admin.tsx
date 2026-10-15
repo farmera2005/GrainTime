@@ -10,6 +10,7 @@ import { ProfileEdit, ProfileList } from "./Profiles";
 import { Notice } from "../components/Field";
 import { SiteForm } from "../components/SiteForm";
 import { HoursEditor } from "../components/HoursEditor";
+import { AgentPanel, AgentSiteDetails, NewAgentSite } from "../components/AgentPanel";
 import { UsersPage } from "./Users";
 import { LdapSettingsPage } from "./LdapSettings";
 
@@ -135,7 +136,7 @@ function SiteList() {
                     {s.last_error ? <span className="field-error"> · {s.last_error.cause}</span> : null}
                   </td>
                   <td>{s.polling_enabled || s.trucks_today ? s.trucks_today : ""}</td>
-                  <td>{s.host}:{s.port}</td>
+                  <td>{s.source === "agent" ? <span title={s.agent?.hostname ?? ""}>Agent{s.agent?.paired ? (s.agent.online ? " · online" : " · offline") : " · not paired"}</span> : `${s.host}:${s.port}`}</td>
                   <td>{s.show_on_dashboard ? "Shown" : "Hidden"}</td>
                   <td>{s.show_on_public ? "Shown" : "Hidden"}</td>
                   <td><Link className="button secondary small-button" to={`/config/sites/${s.id}`}>Edit</Link></td>
@@ -158,10 +159,24 @@ function StatusBadge({ site }: { site: Site }) {
 
 function NewSite() {
   const nav = useNavigate();
+  const [kind, setKind] = useState<"sql" | "agent">("sql");
   return (
     <>
       <h2>Add site</h2>
-      <SiteForm onSaved={(s) => nav(`/config/sites/${s.id}`)} />
+      <div className="source-choice" role="radiogroup" aria-label="Where tickets come from">
+        <label className={kind === "sql" ? "on" : ""}>
+          <input type="radio" name="kind" checked={kind === "sql"} onChange={() => setKind("sql")} />
+          <span><strong>SQL Server database</strong><br /><span className="muted small">GrainTime connects to the scale software's SQL Server over the network (CompuWeigh GMS and similar).</span></span>
+        </label>
+        <label className={kind === "agent" ? "on" : ""}>
+          <input type="radio" name="kind" checked={kind === "agent"} onChange={() => setKind("agent")} />
+          <span><strong>AgVantagePC scale PC (GrainTime Agent)</strong><br /><span className="muted small">The tickets are on the scale PC itself. A small agent on that PC reads them and sends them here.</span></span>
+        </label>
+      </div>
+      <section className="card">
+        {kind === "sql" ? <SiteForm onSaved={(s) => nav(`/config/sites/${s.id}`)} />
+          : <NewAgentSite onCreated={(s) => nav(`/config/sites/${s.id}`)} />}
+      </section>
     </>
   );
 }
@@ -204,13 +219,26 @@ function SiteDetail() {
         </Notice>
       ) : null}
 
-      <section className="card">
+      {site.source === "agent" ? (
+        <>
+          <section className="card">
+            <h3>Details</h3>
+            <AgentSiteDetails key={`${site.id}-agent-details`} site={site} onSaved={(s) => updated({ ...s, agent: site.agent }, "Site details saved.")} />
+          </section>
+          <section className="card">
+            <h3>GrainTime Agent</h3>
+            <AgentPanel site={site} />
+          </section>
+        </>
+      ) : null}
+
+      {site.source === "sql" ? <section className="card">
         <h3>Details and connection</h3>
         <p className="muted small">
           Changes take effect on the collector's next cycle. Leave the password blank to keep the saved one.
         </p>
         <SiteForm key={`${site.id}-form`} site={site} onSaved={(s) => updated(s, "Site details saved.")} />
-      </section>
+      </section> : null}
 
       <section className="card">
         <h3>Data collection</h3>
@@ -227,10 +255,12 @@ function SiteDetail() {
         <HoursEditor key={`${site.id}-hours`} site={site} onChange={setSite} />
       </section>
 
-      <section className="card">
-        <h3>Discovery</h3>
-        <DiscoveryPanel siteId={site.id} />
-      </section>
+      {site.source === "sql" ? (
+        <section className="card">
+          <h3>Discovery</h3>
+          <DiscoveryPanel siteId={site.id} />
+        </section>
+      ) : null}
 
       <section className="card danger-zone">
         <h3>Archive or delete</h3>

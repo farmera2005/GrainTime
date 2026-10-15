@@ -271,13 +271,14 @@ class SiteOut(BaseModel):
     code: str
     address: str | None
     map_url: str | None
-    host: str
-    port: int
+    source: str = "sql"                 # "sql" or "agent"
+    host: str | None
+    port: int | None
     instance_name: str | None
-    database: str
+    database: str | None
     auth_method: str
     domain: str | None
-    username: str
+    username: str | None
     has_password: bool
     encrypt: str
     trust_server_certificate: bool
@@ -293,6 +294,26 @@ class SiteOut(BaseModel):
     last_error: dict | None = None
     stale: bool = False
     trucks_today: int = 0
+    agent: dict | None = None           # agent sites: paired, last seen, AgVantage open
+
+
+class AgentSiteCreate(BaseModel):
+    """A site whose tickets come from a GrainTime Agent on the scale PC."""
+    name: str = Field(min_length=1, max_length=200)
+    code: str = Field(min_length=2, max_length=20)
+    address: str | None = Field(default=None, max_length=500)
+    map_url: str | None = Field(default=None, max_length=1000)
+    mapping_profile_id: int | None = None
+
+    @field_validator("code")
+    @classmethod
+    def _code(cls, v: str) -> str:
+        return validate_code(v)
+
+    @field_validator("map_url")
+    @classmethod
+    def _url(cls, v):
+        return validate_url(v)
 
 
 class SiteDelete(BaseModel):

@@ -1,0 +1,4 @@
+# GrainTime Agent (Windows). Same versions as the backend where shared.
+pyodbc==5.3.0
+pydantic==2.13.5
+tzdata==2026.5          # Windows has no IANA time zone database; America/New_York comes from here

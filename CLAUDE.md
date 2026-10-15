@@ -27,7 +27,16 @@ elevators. See README.md for install, services and deployment notes.
   certificate. After any change under `web/`, run `npm run build` and commit
   `web/dist` (the `web-dist up to date` GitHub check fails otherwise). Never
   "fix" certificate errors by disabling TLS verification.
-- **Only the collector talks to site databases.** The api queues work in
+- **Only the collector, and the GrainTime Agent, talk to site databases.**
+  Agent sites (`sites.source = 'agent'`, AgVantagePC) are read by
+  `agent/graintime_agent` on the scale PC: it reuses
+  `collector/mapping.py` (SiteReader, `read_poll_rows`, `read_preview_rows`;
+  keep that module free of SQLAlchemy), wraps its connection so only single
+  SELECTs run, reads only while the scale software's user instance is already
+  running, and sends rows to `api/routes_agents.py` (HMAC-signed, strictly
+  increasing timestamps; pairing codes hashed, single use, 24 h). The server
+  normalizes; it never sends the agent SQL. The collector and poller skip
+  agent sites and their jobs. The api queues work in
   `collector_jobs` (`test_connection`, `discovery`; later preview and
   backfill). The collector claims jobs with `FOR UPDATE SKIP LOCKED`, runs at
   most one per site, and wipes `params` when a job finishes.
@@ -48,6 +57,10 @@ elevators. See README.md for install, services and deployment notes.
   `collector/poller.py` schedules polls (high-water mark, look-back, nightly
   re-check, back-off, stale); `collector/collect.py` also runs Preview and
   backfill jobs. The poller and jobs share the one-connection-per-site lock.
+- Profiles: weigh times from `weigh_steps` (GMS), `weigh_pair_columns` (earlier
+  = inbound; AgVantage) or inbound/outbound columns; direction/type/commodity
+  from lookups or straight from ticket columns; `manual_rule`; `lookback_mode`
+  `recent_rows` re-reads the newest N by key for tables without indexed times.
 - `common/login_script.py` generates the site login with column-level SELECT
   from a profile. `devtools/mock_gms.py` is a dev-only CompuWeigh GMS mock
   (compose profile `mock`) that uses that script.
@@ -125,6 +138,7 @@ docker compose up -d --build                 # full stack, then open :8080
 cd backend && TEST_DATABASE_URL=postgresql+psycopg://u:p@host:5432/graintime_test pytest
 # optional SQL Server integration test: MSSQL_TEST_HOST/PORT/DATABASE/USER/PASSWORD
 # optional mock GMS end-to-end test: GMS_TEST_HOST, GMS_TEST_SA_PASSWORD
+# agent end-to-end test uses the mock SQL Server too (graintime.devtools.mock_agvantage)
 # optional real LDAP tests: LDAP_TEST_URL (+ LDAP_TEST_CA, LDAP_TEST_BASE), seeded
 #   with docs/dev/ldap-test-seed.ldif
 docker compose --profile mock up -d --build  # dev stack with a mock CompuWeigh GMS site

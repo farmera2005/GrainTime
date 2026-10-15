@@ -66,19 +66,23 @@ class Site(Base):
     code: Mapped[str] = mapped_column(String(20), unique=True)
     address: Mapped[str | None] = mapped_column(Text)
     map_url: Mapped[str | None] = mapped_column(Text)
+    # Where tickets come from: "sql" = the collector connects to the site's SQL
+    # Server; "agent" = a GrainTime Agent on the scale PC sends them (no
+    # connection details are stored for agent sites).
+    source: Mapped[str] = mapped_column(String(10), default="sql", server_default="sql")
     # Connection. Host + static port, never instance-name resolution.
-    host: Mapped[str] = mapped_column(String(255))
-    port: Mapped[int] = mapped_column(Integer)
+    host: Mapped[str | None] = mapped_column(String(255))
+    port: Mapped[int | None] = mapped_column(Integer)
     # Optional named instance (e.g. SQLEXPRESS). Only used to look up the port via
     # SQL Server Browser when testing, or when the saved port stops answering.
     instance_name: Mapped[str | None] = mapped_column(String(128))
-    database_name: Mapped[str] = mapped_column(String(128))
+    database_name: Mapped[str | None] = mapped_column(String(128))
     # "sql": SQL Server login. "windows": domain account, signed in with NTLM.
     auth_method: Mapped[str] = mapped_column(String(10), default="sql", server_default="sql")
     domain: Mapped[str | None] = mapped_column(String(100))
-    username: Mapped[str] = mapped_column(String(128))
+    username: Mapped[str | None] = mapped_column(String(128))
     # Fernet ciphertext. Write-only: never returned by the API, never logged.
-    password_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
+    password_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     encrypt: Mapped[str] = mapped_column(String(10), default="yes")
     trust_server_certificate: Mapped[bool] = mapped_column(Boolean, default=False)
     mapping_profile_id: Mapped[int | None] = mapped_column(
@@ -97,6 +101,10 @@ class Site(Base):
         CheckConstraint("port BETWEEN 1 AND 65535", name="ck_sites_port"),
         CheckConstraint("encrypt IN ('yes','no','strict')", name="ck_sites_encrypt"),
         CheckConstraint("auth_method IN ('sql','windows')", name="ck_sites_auth_method"),
+        CheckConstraint("source IN ('sql','agent')", name="ck_sites_source"),
+        CheckConstraint("source <> 'sql' OR (host IS NOT NULL AND port IS NOT NULL AND "
+                        "database_name IS NOT NULL AND username IS NOT NULL AND "
+                        "password_encrypted IS NOT NULL)", name="ck_sites_sql_connection"),
     )
 
 
@@ -212,3 +220,25 @@ class PublicSiteStatus(Base):
     stale_after_min: Mapped[int] = mapped_column(Integer)
     green_max_min: Mapped[int | None] = mapped_column(Integer)   # level limits (settings, not data)
     yellow_max_min: Mapped[int | None] = mapped_column(Integer)
+
+
+class SiteAgent(Base):
+    """The GrainTime Agent paired with an agent site (one per site).
+
+    The secret signs every request the agent makes (HMAC-SHA256); it is stored
+    Fernet-encrypted and never sent again after pairing. A pairing code is
+    shown once, kept only as a hash, expires, and works once."""
+    __tablename__ = "site_agents"
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), primary_key=True)
+    key_id: Mapped[str | None] = mapped_column(String(32), unique=True)
+    secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+    pairing_code_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    pairing_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_request_ms: Mapped[int] = mapped_column(BigInteger, default=0)   # replay guard
+    version: Mapped[str | None] = mapped_column(String(40))
+    hostname: Mapped[str | None] = mapped_column(String(100))
+    windows_user: Mapped[str | None] = mapped_column(String(150))
+    status: Mapped[dict | None] = mapped_column(JSONB)                  # what the agent last reported
+    clock_skew_s: Mapped[int | None] = mapped_column(Integer)

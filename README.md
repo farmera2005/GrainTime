@@ -222,6 +222,31 @@ website or member portal.
 plus date-range overrides such as harvest hours. Without hours the page shows
 wait times but not open or closed.
 
+### AgVantagePC sites (GrainTime Agent)
+
+AgVantagePC keeps each scale PC's tickets in `LOCALSET.MDF`, opened by a SQL
+Server Express user instance that only programs on that PC can reach. For
+these sites a small **GrainTime Agent** runs on the scale PC (as the account
+that runs AgVantagePC), reads the tickets read-only while AgVantagePC is open,
+and sends them to GrainTime. Add one with **Configuration → Sites → Add site →
+AgVantagePC scale PC**, create a pairing code on its page, and pair the agent
+on the PC. Everything after that (Preview data, backfill, polling, dashboards,
+the public page) works as for SQL Server sites. Install guide, safety rules
+and troubleshooting: [`agent/README.md`](agent/README.md).
+
+The **AgVantagePC** mapping profile (from the New Weston PC):
+
+| GrainTime | AgVantagePC `dbo.scale_ticket` |
+|---|---|
+| Ticket | `st_load` (key; printed number `st_scaleticket`) |
+| Inbound / outbound weigh | the earlier / later of `st_grsdate` (gross) and `st_tardate` (tare) |
+| Status | `st_status`: `CPT` and `APP` completed, `V` voided, `TAR` open |
+| Direction | `st_inout`: `I` received, `O` shipped |
+| Types tracked | `st_type`: `P` purchases and `S` sales; transfers (`T`) left out |
+| Commodity | `st_desc` (BEANS, WHEAT, CORN, …) |
+| Keyed weights | `st_grsmanual` / `st_tarmanual`: kept (profile setting) |
+| Polling | by load number (the table's key): no date scans |
+
 ### Mapping profiles
 
 A mapping profile says where tickets and weigh times live in a scale
@@ -229,6 +254,11 @@ database: tables, columns and value translations, never free-form SQL.
 GrainTime builds every query from it. Sites on the same CompuWeigh version
 share a profile; profiles can be created, cloned and edited in the browser,
 and saving a profile that sites use asks for confirmation.
+
+Profiles can read weigh times from a weigh-steps table (GMS), from two
+columns where the earlier is inbound (AgVantage), or from inbound/outbound
+columns; and take direction, type and commodity from lookup tables or straight
+from the ticket row.
 
 The **CompuWeigh GMS** profile (from the first site's discovery):
 

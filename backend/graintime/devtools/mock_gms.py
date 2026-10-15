@@ -79,7 +79,7 @@ def connect(database: str | None = None):
     host = os.environ.get("MOCK_SQL_HOST", "mock-mssql")
     port = os.environ.get("MOCK_SQL_PORT", "1433")
     pw = os.environ["MOCK_SA_PASSWORD"]
-    db = f"DATABASE={database};" if database else ""
+    db = "DATABASE={" + database.replace("}", "}}") + "};" if database else ""
     return pyodbc.connect(f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER=tcp:{host},{port};{db}"
                           f"UID=sa;PWD={{{pw}}};Encrypt=yes;TrustServerCertificate=yes",
                           autocommit=True, timeout=10)

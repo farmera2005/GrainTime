@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, CollectionStatus, Job, MappingProfile, NormalizedTicket, Site } from "../api";
+import { SiteSwitches, api, CollectionStatus, Job, MappingProfile, NormalizedTicket, Site } from "../api";
 import { ago, fmtDateTime, fmtDuration, localDateISO } from "../format";
 import { isDone, useJob } from "../useJob";
 import { Field, Notice } from "./Field";
@@ -27,7 +27,7 @@ export function DataCollection({ site, onChange }: { site: Site; onChange: (s: S
     return () => window.clearInterval(t);
   }, [refresh]);
 
-  const update = async (patch: Partial<Site>, text: string) => {
+  const update = async (patch: Partial<SiteSwitches>, text: string) => {
     setBusy(true);
     setNote(null);
     try {
@@ -93,7 +93,7 @@ export function DataCollection({ site, onChange }: { site: Site; onChange: (s: S
       {site.mapping_profile_id ? (
         <>
           <h4>Backfill history</h4>
-          <BackfillPanel siteId={site.id} last={status?.last_backfill ?? null} onDone={refresh} />
+          <BackfillPanel siteId={site.id} agent={site.source === "agent"} last={status?.last_backfill ?? null} onDone={refresh} />
         </>
       ) : null}
 
@@ -235,7 +235,7 @@ function PreviewResult({ result }: { result: Record<string, any> }) {
   );
 }
 
-function BackfillPanel(props: { siteId: number; last: Job | null; onDone: () => void }) {
+function BackfillPanel(props: { siteId: number; agent: boolean; last: Job | null; onDone: () => void }) {
   const today = localDateISO(new Date());
   const [from, setFrom] = useState(() => localDateISO(new Date(Date.now() - 730 * 86400000)));
   const [to, setTo] = useState(today);
@@ -288,7 +288,9 @@ function BackfillPanel(props: { siteId: number; last: Job | null; onDone: () => 
       {error ? <Notice kind="error">{error}</Notice> : null}
       {running ? (
         <Notice kind="info">
-          {job!.status === "queued" ? "Waiting for the collector…" : `Loading ${p?.step ?? "…"}: day ${p?.done ?? 0} of ${p?.total ?? "?"}, ${p?.tickets_stored ?? 0} tickets stored`}
+          {job!.status === "queued" ? (props.agent ? "Waiting for the agent on the scale PC (it picks up jobs while the scale software is open)…" : "Waiting for the collector…")
+            : p?.total ? `Loading ${p?.step ?? "…"}: day ${p?.done ?? 0} of ${p.total}, ${p?.tickets_stored ?? 0} tickets stored`
+            : `Loading: ${p?.step ?? "starting"}, ${p?.tickets_stored ?? 0} tickets stored`}
           {p?.total ? <progress value={p.done} max={p.total} /> : null}
         </Notice>
       ) : null}

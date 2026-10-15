@@ -24,7 +24,7 @@ from ..common.logging import get_logger
 from ..common.models import MappingProfile, Site, SiteCollectorState
 from ..common.profiles import ProfileConfig
 from ..common.tickets_store import upsert_tickets
-from . import collect, sitedb
+from . import collect, mapping, sitedb
 from .jobs import JobRunner, spec_from_site
 
 log = get_logger("collector.poller")
@@ -60,7 +60,7 @@ class Poller:
         with self.Session() as db:
             default = int(settings_store.get_globals(db)["poll_interval_s"])
             sites = db.scalars(select(Site).where(
-                Site.polling_enabled.is_(True), Site.archived_at.is_(None),
+                Site.polling_enabled.is_(True), Site.archived_at.is_(None), Site.source == "sql",
                 Site.mapping_profile_id.is_not(None))).all()
             states = {s.site_id: s for s in db.scalars(select(SiteCollectorState))}
             out = []
@@ -106,7 +106,7 @@ class Poller:
 
         cached = self.lookups.get(site_id)
         lookups = cached[2] if cached and cached[1] == fp and time.time() - cached[0] < LOOKUP_TTL_S else None
-        local_hour = collect.local_now().hour
+        local_hour = mapping.local_now().hour
         recheck = (local_hour in RECHECK_LOCAL_HOURS and
                    (last_recheck is None or _now() - last_recheck > RECHECK_EVERY))
         t0 = time.monotonic()
