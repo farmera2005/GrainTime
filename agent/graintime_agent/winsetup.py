@@ -44,7 +44,8 @@ def install_copy() -> Path:
 
 def enable_autostart(exe: Path) -> None:
     import winreg
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+    # CreateKeyEx opens the key, or creates it on a fresh profile that has none yet.
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, f'"{exe}" run')
 
 
