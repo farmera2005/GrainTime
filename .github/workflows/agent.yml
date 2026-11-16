@@ -1,8 +1,10 @@
 # Builds GrainTimeAgent.exe (the agent for AgVantagePC scale PCs) on Windows,
 # after testing the Windows-only parts (DPAPI, time zones, sign-in start-up).
-# Every run keeps the .exe as an artifact (90 days). Pushing a tag
-# agent-v<version> (matching VERSION in agent/graintime_agent/__init__.py)
-# also publishes it as a GitHub Release, a permanent download page.
+# Every run keeps the .exe as an artifact (90 days). When VERSION in
+# agent/graintime_agent/__init__.py has no GitHub Release yet, the build also
+# publishes one (tag agent-v<version>), a permanent download page. A version
+# already released is never replaced by a branch build; pushing the tag
+# agent-v<version> again re-publishes that version's .exe.
 name: GrainTime Agent (Windows build)
 on:
   push:
@@ -50,43 +52,59 @@ jobs:
           if-no-files-found: error
 
   publish:
-    # Only for agent-v* tags: attach the tested .exe to a GitHub Release.
-    if: startsWith(github.ref, 'refs/tags/agent-v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          name: GrainTimeAgent
-          path: dist
-      - name: Check the tag matches the agent's version
-        run: |
-          version=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' agent/graintime_agent/__init__.py)
-          if [ "${GITHUB_REF_NAME}" != "agent-v${version}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match VERSION ${version} in agent/graintime_agent/__init__.py"
-            exit 1
-          fi
-      - name: Publish the release
+      - name: Decide whether to publish
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha256sum dist/GrainTimeAgent.exe | tee dist/GrainTimeAgent.exe.sha256
-          notes="GrainTime Agent ${GITHUB_REF_NAME#agent-v} for AgVantagePC scale PCs (Windows).
+          version=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' agent/graintime_agent/__init__.py)
+          tag="agent-v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME}" != "${tag}" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match VERSION ${version} in agent/graintime_agent/__init__.py"
+              exit 1
+            fi
+            echo "mode=replace" >> "$GITHUB_OUTPUT"
+          elif gh release view "${tag}" >/dev/null 2>&1; then
+            echo "::notice::${tag} is already released; bump VERSION to publish a new one."
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=create" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.plan.outputs.mode != 'skip'
+        with:
+          name: GrainTimeAgent
+          path: dist
+      - name: Publish the release
+        if: steps.plan.outputs.mode != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          MODE: ${{ steps.plan.outputs.mode }}
+        run: |
+          sha256sum dist/GrainTimeAgent.exe | sed 's#dist/##' | tee dist/GrainTimeAgent.exe.sha256
+          notes="GrainTime Agent ${TAG#agent-v} for AgVantagePC scale PCs (Windows).
 
           Download **GrainTimeAgent.exe**, copy it to the scale PC and run it while signed in as the
           account that runs AgVantagePC. Pair it with the code from the site's page in GrainTime
           (Configuration > Sites > the site > GrainTime Agent). No administrator rights needed.
           Install guide and safety rules: agent/README.md.
 
-          Built and self-tested on Windows by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}.
+          Built and self-tested on Windows by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          from commit ${GITHUB_SHA}.
           Not code-signed: Windows SmartScreen may ask for confirmation the first time.
           SHA-256: $(cut -d' ' -f1 dist/GrainTimeAgent.exe.sha256)"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/GrainTimeAgent.exe dist/GrainTimeAgent.exe.sha256 --clobber
+          if [ "${MODE}" = "replace" ] && gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/GrainTimeAgent.exe dist/GrainTimeAgent.exe.sha256 --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/GrainTimeAgent.exe dist/GrainTimeAgent.exe.sha256 \
-              --title "GrainTime Agent ${GITHUB_REF_NAME#agent-v}" --notes "$notes" --verify-tag
+            gh release create "${TAG}" dist/GrainTimeAgent.exe dist/GrainTimeAgent.exe.sha256 \
+              --target "${GITHUB_SHA}" --title "GrainTime Agent ${TAG#agent-v}" --notes "$notes"
           fi

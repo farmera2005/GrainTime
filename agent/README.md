@@ -73,10 +73,11 @@ file's SHA-256 so IT can check the download.
 
 Releases are made by the **GrainTime Agent (Windows build)** workflow
 (`.github/workflows/agent.yml`): it tests the Windows-only parts, builds the
-program, self-tests the built .exe, and, when a tag `agent-v<version>` is
-pushed (matching `VERSION` in `graintime_agent/__init__.py`), publishes it.
-To release a new version: bump `VERSION`, commit, then push the tag
-`agent-v<new version>`. Every build is also kept for 90 days as a run
+program and self-tests the built .exe. When `VERSION` in
+`graintime_agent/__init__.py` has no release yet, it publishes one, tagged
+`agent-v<version>`. To release a new version, bump `VERSION` and push. A
+released version is never replaced by a later build (pushing its tag again
+re-publishes it on purpose). Every build is also kept for 90 days as a run
 artifact.
 
 The program is not code-signed: Windows SmartScreen may ask for confirmation
