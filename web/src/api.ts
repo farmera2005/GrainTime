@@ -345,6 +345,61 @@ export type LdapTestResult = {
 };
 export type UserAdmin = User & { is_active: boolean; created_at: string | null; last_login_at: string | null };
 
+export type ReportQuery = { from: string; to: string; sites: number[]; direction: "received" | "shipped";
+  compare: "previous" | "last_year" | "none"; title?: string };
+
+export function reportUrl(q: ReportQuery, kind: "period" | "trucks", format: string): string {
+  const p = new URLSearchParams({ from: q.from, to: q.to, direction: q.direction, format });
+  if (kind === "period") p.set("compare", q.compare);
+  if (q.sites.length) p.set("sites", q.sites.join(","));
+  if (q.title && kind === "period") p.set("title", q.title);
+  return `/api/reports/${kind}?${p.toString()}`;
+}
+
+export type EmailSettings = {
+  method: "graph" | "smtp";
+  from_address: string;
+  from_name: string;
+  link_base_url: string;
+  tenant_id: string;
+  client_id: string;
+  client_secret?: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_security: "starttls" | "ssl" | "none";
+  smtp_username: string;
+  smtp_password?: string;
+  ca_cert_pem: string | null;
+  has_client_secret?: boolean;
+  has_smtp_password?: boolean;
+  configured?: boolean;
+};
+
+export type ReportSchedule = {
+  id: number;
+  name: string;
+  enabled: boolean;
+  frequency: "daily" | "weekly" | "monthly";
+  weekday: number | null;
+  month_day: number | null;
+  send_time: string;
+  period: string;
+  period_label?: string;
+  compare: "previous" | "last_year" | "none";
+  site_ids: number[];
+  direction: "received" | "shipped";
+  include_trucks: boolean;
+  recipients: string[];
+  next_run_at?: string | null;
+  next_period_label?: string | null;
+  run_requested?: boolean;
+  last_run_at?: string | null;
+  last_status?: "sent" | "failed" | null;
+};
+export type ScheduleList = { email_configured: boolean; periods: Record<string, string>; schedules: ReportSchedule[] };
+export type ReportRunRow = { id: number; trigger: string; status: string; period_from: string; period_to: string;
+  recipients: string[]; error: string | null; started_at: string; finished_at: string | null };
+
 export class ApiError extends Error {
   status: number;
   fields: Record<string, string>;
@@ -463,4 +518,20 @@ export const api = {
   agentPairingCode: (siteId: number) =>
     request<{ code: string; expires_at: string; agent: AgentStatus }>("POST", `/api/admin/sites/${siteId}/agent/pairing-code`),
   agentRevoke: (siteId: number) => request<AgentStatus>("POST", `/api/admin/sites/${siteId}/agent/revoke`),
+  reportHtml: async (q: ReportQuery) => {
+    const res = await fetch(reportUrl(q, "period", "html"), { credentials: "same-origin" });
+    const text = await res.text();
+    if (!res.ok) throw new ApiError(res.status, safeJson(text)?.detail || "Could not build the report");
+    return text;
+  },
+  getEmail: () => request<EmailSettings>("GET", "/api/settings/email"),
+  putEmail: (b: EmailSettings) => request<EmailSettings>("PUT", "/api/settings/email", b),
+  testEmail: (b: { settings: EmailSettings; to: string }) =>
+    request<{ ok: boolean; message: string; code?: string }>("POST", "/api/settings/email/test", b),
+  listSchedules: () => request<ScheduleList>("GET", "/api/admin/report-schedules"),
+  createSchedule: (b: Omit<ReportSchedule, "id">) => request<ReportSchedule>("POST", "/api/admin/report-schedules", b),
+  updateSchedule: (id: number, b: Omit<ReportSchedule, "id">) => request<ReportSchedule>("PUT", `/api/admin/report-schedules/${id}`, b),
+  deleteSchedule: (id: number) => request<{ deleted: boolean }>("DELETE", `/api/admin/report-schedules/${id}`),
+  sendScheduleNow: (id: number) => request<ReportSchedule>("POST", `/api/admin/report-schedules/${id}/send-now`),
+  scheduleRuns: (id: number) => request<ReportRunRow[]>("GET", `/api/admin/report-schedules/${id}/runs`),
 };

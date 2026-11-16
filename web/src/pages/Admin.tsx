@@ -13,17 +13,20 @@ import { HoursEditor } from "../components/HoursEditor";
 import { AgentPanel, AgentSiteDetails, NewAgentSite } from "../components/AgentPanel";
 import { UsersPage } from "./Users";
 import { LdapSettingsPage } from "./LdapSettings";
+import { EmailSettingsPage } from "./EmailSettings";
+import { ReportsPage } from "./Reports";
 
 /** The signed-in app for administrators: the dashboard plus Configuration. */
 export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promise<void> }) {
   const path = useLocation().pathname;
-  const wide = path.startsWith("/dashboard");
+  const wide = path.startsWith("/dashboard") || path.startsWith("/reports");
   return (
     <div className="app">
       <header className="topbar">
         <Link to="/dashboard" className="brand">GrainTime</Link>
         <nav>
           <NavLink to="/dashboard">Dashboard</NavLink>
+          <NavLink to="/reports">Reports</NavLink>
           <NavLink to="/config">Configuration</NavLink>
           <a href="/public/" target="_blank" rel="noopener">Public page ↗</a>
         </nav>
@@ -34,6 +37,7 @@ export function AdminApp({ user, onLogout }: { user: User; onLogout: () => Promi
       <main className={wide ? "content content-wide" : "content"}>
         <Routes>
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/reports" element={<ReportsPage isAdmin />} />
           <Route path="/config/*" element={<ConfigArea user={user} />} />
           {/* Old addresses (bookmarks) move to Configuration. */}
           <Route path="/admin/settings" element={<Navigate to="/config/collection" replace />} />
@@ -53,6 +57,9 @@ const CONFIG_SECTIONS: { group: string; items: { to: string; label: string }[] }
   { group: "Statistics", items: [
     { to: "/config/collection", label: "Collection & metrics" },
     { to: "/config/public", label: "Public page" },
+  ] },
+  { group: "Reports", items: [
+    { to: "/config/email", label: "Email" },
   ] },
   { group: "Access", items: [
     { to: "/config/users", label: "Users" },
@@ -84,6 +91,7 @@ function ConfigArea({ user }: { user: User }) {
           <Route path="public" element={<PublicSettings />} />
           <Route path="users" element={<UsersPage me={user} />} />
           <Route path="sign-in" element={<LdapSettingsPage />} />
+          <Route path="email" element={<EmailSettingsPage />} />
           <Route path="*" element={<Navigate to="/config/sites" replace />} />
         </Routes>
       </div>

@@ -2,7 +2,8 @@
 
 Jobs (test connection, discovery, preview, backfill) are claimed every second;
 sites due for a poll are checked every 5 seconds; the public page's aggregates
-are recomputed every 30 seconds (central database only).
+are recomputed every 30 seconds, and due scheduled reports are sent (on their
+own thread, so building or emailing a report never delays collection).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ..common.db import get_sessionmaker
 from ..common.logging import get_logger, setup_logging
 from ..common.publish import publish
+from ..common.report_schedule import run_due
 from .jobs import JobRunner
 from .poller import Poller
 
@@ -24,6 +26,7 @@ HEALTH_PORT = 8081
 LOOP_INTERVAL_S = 1.0
 POLL_CHECK_EVERY_S = 5.0
 PUBLISH_EVERY_S = 30.0
+REPORTS_EVERY_S = 30.0
 STALE_LOOP_S = 30
 
 state = {"last_loop": 0.0, "db_ok": False, "started": time.time()}
@@ -47,6 +50,15 @@ class Health(BaseHTTPRequestHandler):
         pass
 
 
+def reports_loop(stop: threading.Event) -> None:
+    Session = get_sessionmaker()
+    while not stop.wait(REPORTS_EVERY_S):
+        try:
+            run_due(Session)
+        except Exception as exc:          # never let reports stop the collector
+            log.warning("scheduled reports not run", extra={"error": str(exc)[:300]})
+
+
 def main() -> None:
     setup_logging("collector")
     stop = threading.Event()
@@ -56,6 +68,7 @@ def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", HEALTH_PORT), Health)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
+    threading.Thread(target=reports_loop, args=(stop,), daemon=True, name="reports").start()
     runner = JobRunner()
     poller = Poller(runner)
     last_poll_check = 0.0

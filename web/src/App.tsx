@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { api, SetupStatus } from "./api";
 import { Notice } from "./components/Field";
 import { AdminApp } from "./pages/Admin";
 import { DashboardPage } from "./pages/Dashboard";
+import { ReportsPage } from "./pages/Reports";
 import { LoginPage } from "./pages/Login";
 import { SetupWizard } from "./pages/SetupWizard";
 
@@ -44,16 +45,28 @@ export function App() {
 
   if (status.user.role !== "admin") {
     return (
-      <div className="app">
-        <header className="topbar">
-          <span className="brand">GrainTime</span>
-          <nav><a href="/public/" target="_blank" rel="noopener">Public page ↗</a></nav>
-          <span className="spacer" />
-          <span className="muted">{status.user.display_name}</span>
-          <button className="link" onClick={logout}>Sign out</button>
-        </header>
-        <main className="content content-wide"><DashboardPage /></main>
-      </div>
+      <BrowserRouter>
+        <div className="app">
+          <header className="topbar">
+            <NavLink to="/dashboard" className="brand">GrainTime</NavLink>
+            <nav>
+              <NavLink to="/dashboard">Dashboard</NavLink>
+              <NavLink to="/reports">Reports</NavLink>
+              <a href="/public/" target="_blank" rel="noopener">Public page ↗</a>
+            </nav>
+            <span className="spacer" />
+            <span className="muted">{status.user.display_name}</span>
+            <button className="link" onClick={logout}>Sign out</button>
+          </header>
+          <main className="content content-wide">
+            <Routes>
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/reports" element={<ReportsPage isAdmin={false} />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </main>
+        </div>
+      </BrowserRouter>
     );
   }
   return (

@@ -222,6 +222,77 @@ website or member portal.
 plus date-range overrides such as harvest hours. Without hours the page shows
 wait times but not open or closed.
 
+### Reports
+
+**Reports** in the top menu (every signed-in user):
+
+- **Run a report**: pick a period (yesterday, last week, last month,
+  month to date, season to date or custom dates), sites, received or shipped,
+  and what to compare against (the previous period, the same period last year,
+  or nothing). The report covers time on site (median, 90th percentile),
+  trucks and completed trucks with changes from the comparison period. It
+  includes a site comparison (busiest day and hour, Short / Moderate / Long
+  against the site's limits), the trend by day, arrivals by hour,
+  commodities, and how many tickets were counted or left out.
+- **Print / Save as PDF** prints the report cleanly (one page per section).
+  **Open in new tab** gives a link that reruns the same report.
+- **Excel** or **CSV** download every truck in the period: site, ticket,
+  in and out times (Eastern), minutes on site, commodity, whether it was
+  counted, and if not, why (voided, single weigh, over the ceiling, still on
+  site). The Excel file has a Summary sheet too.
+
+**Scheduled reports** (admins, *Scheduled* tab): daily, weekly or monthly at
+a set Eastern time, covering yesterday, last week (Mon–Sun), last 7 days,
+month to date, last month or season to date. Pick the sites, recipients and
+optionally an attached Excel file of every truck. The email is a short
+summary (readable in Outlook and on phones) with a link to the full report in
+GrainTime. **Send now** sends the period a scheduled run would cover;
+**History** shows every send and any error. The collector checks every 30 s;
+if GrainTime was down at send time, the report goes out once when it comes
+back (missed sends are not repeated).
+
+#### Email (Configuration → Email)
+
+Recommended for Microsoft 365: **Microsoft 365 (Microsoft Graph)**. Microsoft
+has been retiring password sign-in for SMTP, so an app registration is the
+supported way for a service to send mail. A Microsoft 365 admin does this
+once:
+
+1. **Microsoft Entra admin center** → App registrations → New registration:
+   name *GrainTime*, single tenant, no redirect URI.
+2. API permissions → Add a permission → Microsoft Graph → **Application
+   permissions** → **Mail.Send** → **Grant admin consent**.
+3. Certificates & secrets → New client secret. Copy the **Value** (shown
+   once) and note when it expires; GrainTime stops sending after that until a
+   new secret is entered.
+4. From the app's Overview copy the **Directory (tenant) ID** and the
+   **Application (client) ID**.
+5. Pick the sending mailbox (a shared mailbox such as
+   `graintime@mercerlandmark.com` works and needs no licence).
+6. Recommended: Mail.Send on its own lets the app send as *any* mailbox.
+   Limit it to the sending mailbox with an Exchange Online application access
+   policy (`New-ApplicationAccessPolicy -AccessRight RestrictAccess
+   -AppId <client id> -PolicyScopeGroupId <mail-enabled group with the mailbox>`)
+   or RBAC for Applications.
+
+Enter the tenant ID, client ID, client secret and sending address, then use
+**Send test email** (it tests the form without saving it) and **Save**.
+The server needs outbound HTTPS to `login.microsoftonline.com` and
+`graph.microsoft.com`. Graph attachments are limited to 3 MB; a larger truck
+file is left off with a note in the email.
+
+**SMTP** works with an Exchange / Microsoft 365 relay connector (for example
+`<tenant>.mail.protection.outlook.com` on port 25 with STARTTLS, with a
+connector that accepts this server's public IP address), an internal relay or
+another mail server; sign-in is optional.
+
+Certificates are always verified. If the network inspects HTTPS with its own
+certificate authority, paste that CA certificate under *Extra CA
+certificate*; it is trusted in addition to the system ones. The client secret
+and SMTP password are stored encrypted and never shown again, like site
+passwords. **GrainTime's address** sets the link in emails (for example
+`http://graintime:8080`).
+
 ### AgVantagePC sites (GrainTime Agent)
 
 AgVantagePC keeps each scale PC's tickets in `LOCALSET.MDF`, opened by a SQL
@@ -302,7 +373,7 @@ for the web app). You don't need to create a `.env` file.
 | `db` | PostgreSQL central store (persistent volume) |
 | `migrate` | One-shot: applies database migrations |
 | `api` | Internal FastAPI backend for the admin panel and setup wizard (and later the dashboards) |
-| `collector` | **The only component that connects to site databases.** Runs Test connection and Discovery jobs queued by the api; later polls tickets |
+| `collector` | **The only component that connects to site databases.** Runs Test connection and Discovery jobs queued by the api, polls tickets, and sends scheduled report emails |
 | `web` | React frontend served by nginx; proxies `/api` to `api`. The only published port (8080), on the internal network |
 
 The api never connects to a site. Test connection and Discovery are written
@@ -323,6 +394,7 @@ a time.
 | argon2-cffi | Current recommended password hashing for local accounts |
 | ldap3 | Pure-Python LDAP client for directory sign-in (LDAPS, StartTLS, service-account or direct bind); no system libraries needed |
 | React + TypeScript + Vite, React Router | Required stack; Vite for fast builds, no other UI dependencies |
+| openpyxl | Writes the Excel truck export (no Excel or LibreOffice needed) |
 | nginx (unprivileged image) | Serves the built frontend and proxies the api |
 
 ## Security notes
@@ -339,6 +411,9 @@ a time.
   certificate unless an administrator explicitly turns that off.
 - Every change made in the admin panel or the wizard goes to `audit_log` (who,
   when, old and new values). Passwords are recorded only as "(changed)".
+- The email client secret and SMTP password are Fernet-encrypted, write-only
+  and audited as "(changed)". Report emails carry aggregates; the optional
+  truck file goes only to the recipients an admin lists.
 - Nothing is exposed to the internet. How the public page is published will be
   decided separately.
 

@@ -70,6 +70,20 @@ elevators. See README.md for install, services and deployment notes.
   dashboards (filters + widget list, JSONB). The web dashboard
   (`web/src/pages/Dashboard.tsx`) draws charts with the hand-written SVG kit
   in `web/src/charts/charts.tsx` (no chart library; one y-axis per chart).
+- Reports: `common/reports.py` builds the period report from `metrics.py`
+  (summary, compare, trend, by_hour, by_commodity) and renders it as HTML for
+  the browser (SVG charts, print CSS) or for email (tables + inline styles,
+  Outlook-safe), plus the truck export (`truck_rows`, xlsx via openpyxl, CSV).
+  `api/routes_reports.py`: `/api/reports/period` and `/api/reports/trucks` for
+  any signed-in user; `/api/settings/email` and
+  `/api/admin/report-schedules` for admins. `common/mailer.py` sends through
+  Microsoft Graph (client credentials, Mail.Send) or SMTP; settings in
+  `app_settings["email"]`, client secret / SMTP password Fernet-encrypted and
+  write-only; TLS always verified (optional extra CA PEM). Schedules
+  (`report_schedules`, runs in `report_runs`) are sent by the collector's
+  `reports_loop` via `common/report_schedule.run_due` (Eastern times,
+  `FOR UPDATE SKIP LOCKED`, missed sends not repeated). Web:
+  `pages/Reports.tsx`, `pages/EmailSettings.tsx` (Configuration → Email).
 - Sign-in: `api/routes_setup.login` checks local accounts first (break-glass
   admin always works), then LDAP if enabled (`common/ldap_auth.py`, settings in
   `app_settings["ldap"]`, service-account password Fernet-encrypted and
@@ -79,7 +93,7 @@ elevators. See README.md for install, services and deployment notes.
   `api/routes_auth_admin.py` (`/api/settings/ldap`, `/api/admin/users`).
 - The web admin UI lives under **Configuration** (`/config/*`, side menu in
   `pages/Admin.tsx`): Sites, Mapping profiles, Collection & metrics, Public
-  page, Users, Sign-in & LDAP. Put new settings there, not in new top-level
+  page, Users, Sign-in & LDAP, Email. Put new settings there, not in new top-level
   menus.
 - Code: `backend/graintime/{common,api,collector}`, `backend/migrations`,
   `web/src`. The setup wizard and the admin panel share `SiteForm`,

@@ -298,3 +298,26 @@ def distribution(db: DbSession, f: Filters, bin_min: int = 5) -> list[dict]:
     nbins = min(nbins, max(last + 1, 12))
     return [{"from_min": i * bin_min, "to_min": (i + 1) * bin_min, "count": int(rows.get(i, 0))}
             for i in range(nbins)]
+
+
+def by_commodity(db: DbSession, f: Filters) -> list[dict]:
+    """Per commodity: trucks arriving, completed (valid) trucks, median, p90."""
+    p = f.params()
+    done = {r[0]: r for r in db.execute(text(f"""
+        SELECT COALESCE(commodity, '(none)') AS c, COUNT(*),
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_s),
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY duration_s)
+        FROM tickets WHERE {BASE} AND {VALID} AND outbound_at >= :start AND outbound_at < :end
+        GROUP BY c
+    """), p).all()}
+    arrivals = {r[0]: int(r[1]) for r in db.execute(text(f"""
+        SELECT COALESCE(commodity, '(none)') AS c, COUNT(*)
+        FROM tickets WHERE {BASE} AND status <> 'voided' AND inbound_at >= :start AND inbound_at < :end
+        GROUP BY c
+    """), p).all()}
+    out = [{"commodity": c, "trucks": arrivals.get(c, 0),
+            "completed": int(done[c][1]) if c in done else 0,
+            "median_min": _min(done[c][2]) if c in done else None,
+            "p90_min": _min(done[c][3]) if c in done else None}
+           for c in set(done) | set(arrivals)]
+    return sorted(out, key=lambda r: -r["trucks"])

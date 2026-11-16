@@ -287,3 +287,11 @@ td select { font: inherit; padding: 3px 6px; border: 1px solid var(--border); bo
 .source-choice label { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; gap: 10px; cursor: pointer; background: var(--surface); }
 .source-choice label.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .source-choice input { margin-top: 4px; }
+
+/* Reports */
+.report-form { align-items: flex-end; }
+.report-form button[type=submit] { align-self: flex-end; }
+.report-actions { margin: 4px 0 10px; }
+.report-frame { width: 100%; min-height: 900px; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+.wrap-cell { white-space: normal; }
+.inline-input { font: inherit; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 260px; }

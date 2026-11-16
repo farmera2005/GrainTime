@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import (BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer,
+from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer,
                         LargeBinary, String, Text, UniqueConstraint, func)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -242,3 +242,46 @@ class SiteAgent(Base):
     windows_user: Mapped[str | None] = mapped_column(String(150))
     status: Mapped[dict | None] = mapped_column(JSONB)                  # what the agent last reported
     clock_skew_s: Mapped[int | None] = mapped_column(Integer)
+
+
+class ReportSchedule(Base):
+    """A report emailed on a schedule (Eastern time)."""
+    __tablename__ = "report_schedules"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    frequency: Mapped[str] = mapped_column(String(10))               # daily | weekly | monthly
+    weekday: Mapped[int | None] = mapped_column(Integer)             # weekly: 0 = Monday
+    month_day: Mapped[int | None] = mapped_column(Integer)           # monthly: 1-28
+    send_time: Mapped[str] = mapped_column(String(5))                # "HH:MM" Eastern
+    period: Mapped[str] = mapped_column(String(20))                  # see report_schedule.PERIODS
+    compare: Mapped[str] = mapped_column(String(10), default="previous")
+    site_ids: Mapped[list] = mapped_column(JSONB, default=list)      # empty = every dashboard site
+    direction: Mapped[str] = mapped_column(String(10), default="received")
+    include_trucks: Mapped[bool] = mapped_column(Boolean, default=False)
+    recipients: Mapped[list] = mapped_column(JSONB, default=list)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_requested: Mapped[bool] = mapped_column(Boolean, default=False)   # "Send now"
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(10))
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+    __table_args__ = (
+        CheckConstraint("frequency IN ('daily','weekly','monthly')", name="ck_report_schedules_frequency"),
+    )
+
+
+class ReportRun(Base):
+    __tablename__ = "report_runs"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    schedule_id: Mapped[int] = mapped_column(ForeignKey("report_schedules.id", ondelete="CASCADE"))
+    trigger: Mapped[str] = mapped_column(String(10))                 # schedule | manual
+    status: Mapped[str] = mapped_column(String(10))                  # running | sent | failed
+    period_from: Mapped[date | None] = mapped_column(Date)
+    period_to: Mapped[date | None] = mapped_column(Date)
+    recipients: Mapped[list] = mapped_column(JSONB, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
