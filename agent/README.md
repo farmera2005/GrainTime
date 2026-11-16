@@ -66,12 +66,22 @@ installs, as on the New Weston PC).
 
 ## Getting GrainTimeAgent.exe
 
-The GitHub workflow **GrainTime Agent (Windows build)**
-(`.github/workflows/agent.yml`) tests the Windows-only parts and builds the
-program on every change; download **GrainTimeAgent** from the run's artifacts.
-It is not code-signed: Windows SmartScreen may ask for confirmation the first
-time, and some antivirus products are wary of unsigned programs. Signing it
-with your company's code-signing certificate avoids both.
+Download it from the repository's **Releases** page
+(`https://github.com/farmera2005/GrainTime/releases`), e.g.
+**GrainTime Agent 1.0.0 → GrainTimeAgent.exe**. Each release also lists the
+file's SHA-256 so IT can check the download.
+
+Releases are made by the **GrainTime Agent (Windows build)** workflow
+(`.github/workflows/agent.yml`): it tests the Windows-only parts, builds the
+program, self-tests the built .exe, and, when a tag `agent-v<version>` is
+pushed (matching `VERSION` in `graintime_agent/__init__.py`), publishes it.
+To release a new version: bump `VERSION`, commit, then push the tag
+`agent-v<new version>`. Every build is also kept for 90 days as a run
+artifact.
+
+The program is not code-signed: Windows SmartScreen may ask for confirmation
+the first time, and some antivirus products are wary of unsigned programs.
+Signing it with your company's code-signing certificate avoids both.
 
 ## Troubleshooting
 
