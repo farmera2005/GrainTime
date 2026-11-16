@@ -86,13 +86,28 @@ Signing it with your company's code-signing certificate avoids both.
 
 ## Troubleshooting
 
+When something is wrong, the site's page in GrainTime says why under
+**GrainTime Agent**. On the scale PC, **`GrainTimeAgent.exe diagnose`** (run
+as the same Windows account) writes `diagnose.txt` and opens it: which
+account the agent runs as, which SQL Server instances it found, and whether it
+could open the scale database.
+
 | GrainTime shows | Meaning / fix |
 |---|---|
 | Agent: Offline | The PC is off, signed out, or can't reach GrainTime (check `http://<server>:8080` opens in a browser on the PC). |
-| Scale software database: Closed | AgVantagePC isn't open. Nothing to read until it is. |
+| Scale software database: Closed, "No SQL Server is running for <account>" | The agent runs as a different Windows account than the scale software. Check **Scale PC** on the site's page: it must be the account that runs AgVantagePC. Pair the agent again while signed in as that account. |
+| Closed, "user instance is not running" | AgVantagePC is closed, or its database was closed after being idle. It's read again as soon as AgVantagePC opens it. |
+| Closed, "LOCALSET.MDF is not open in any SQL Server" | Neither the account's own instance nor a SQL Server service on the PC has the database open. Run `diagnose` and send the report. |
 | Windows refused the agent's sign-in | The agent is running as a different Windows account than AgVantagePC. Pair it while signed in as the scale account. |
 | No SQL Server ODBC driver | Install Microsoft ODBC Driver 18 for SQL Server. |
 | Clock is N minutes off | Ticket times come from the PC's clock; fix the PC's time sync. |
+
+Where the agent looks, in order: the account's own SQL Server Express user
+instance (as AgVantagePC uses at New Weston; found from its `error.log` and
+named pipe), then any SQL Server service on the PC (e.g. `SQLEXPRESS`), in
+case LOCALSET is attached there instead. It finds them by listing the PC's
+named pipes, which never connects to anything, and only then opens one short
+read-only connection to confirm where the database is.
 
 ## Development
 

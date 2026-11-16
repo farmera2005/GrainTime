@@ -21,5 +21,5 @@ def agent_summary(a: SiteAgent | None, now: datetime | None = None) -> dict:
         "online": bool(a.last_seen_at and (now - a.last_seen_at).total_seconds() < 300),
         "version": a.version, "hostname": a.hostname, "windows_user": a.windows_user,
         "instance": st.get("instance"), "database": st.get("database"), "driver": st.get("driver"),
-        "error": st.get("error"), "clock_skew_s": a.clock_skew_s,
+        "error": st.get("error"), "detail": st.get("detail"), "clock_skew_s": a.clock_skew_s,
     }

@@ -64,29 +64,115 @@ def latest_pipe_in_log(text: str) -> str | None:
     return found[-1] if found else None
 
 
-def pipe_exists(pipe: str) -> bool:
-    return os.path.exists(pipe)
+PIPE_PREFIX = "\\\\.\\pipe\\"
 
 
-def find_running_instance(base: Path | None = None, exists=pipe_exists) -> str | None:
-    """The named pipe of this account's running user instance, or None."""
-    base = base or sql_data_dir()
-    if not base.is_dir():
+def windows_user() -> str:
+    dom = os.environ.get("USERDOMAIN")
+    user = os.environ.get("USERNAME") or os.environ.get("USER") or "?"
+    return f"{dom}\\{user}" if dom else user
+
+
+def list_pipes() -> list[str] | None:
+    """Names of the named pipes on this PC (e.g. 'MSSQL$SQLEXPRESS\\sql\\query').
+
+    Listing never connects to a pipe. (Checking one path with os.path.exists
+    would: on Windows that opens a client connection, which fails while the
+    pipe is busy and shows up in SQL Server as a dropped connection.)"""
+    try:
+        return os.listdir(PIPE_PREFIX)
+    except OSError:
         return None
-    best = None
-    for inst in base.iterdir():
-        log = inst / "error.log"
-        if not log.is_file():
-            continue
-        try:
+
+
+def pipe_exists(pipe: str, present: list[str] | None = None) -> bool:
+    if present is None:
+        present = list_pipes()
+    if present is None:
+        return False
+    name = pipe[len(PIPE_PREFIX):] if pipe.lower().startswith(PIPE_PREFIX.lower()) else pipe
+    return name.lower() in {p.lower() for p in present}
+
+
+def find_candidates(base: Path | None = None, pipes: list[str] | None = None) -> tuple[list[str], dict]:
+    """Where the scale software's database may be open, best first, plus what
+    was checked (shown on the site's page in GrainTime when nothing is found).
+
+    1. This Windows account's own SQL Server Express *user instance* (as
+       AgVantagePC uses at New Weston): the pipe named in its error.log, if
+       that pipe exists right now.
+    2. Any SQL Server *service* on this PC (e.g. SQLEXPRESS), for PCs where
+       the database is attached to the regular service instead. The caller
+       checks the database is really there before reading.
+    Nothing is connected to here."""
+    base = base or sql_data_dir()
+    present = pipes if pipes is not None else list_pipes()
+    detail: dict = {"account": windows_user(), "user_instance_folder": str(base),
+                    "user_instance_logs": [], "service_pipes": [], "pipes_listed": present is not None}
+    user_pipes: list[tuple[float, str]] = []
+    if base.is_dir():
+        for inst in sorted(base.iterdir()):
+            log = inst / "error.log"
+            if not log.is_file():
+                continue
+            try:
+                pipe = latest_pipe_in_log(read_log(log))
+                mtime = log.stat().st_mtime
+            except OSError as exc:
+                detail["user_instance_logs"].append({"instance": inst.name, "error": str(exc)[:200]})
+                continue
+            alive = bool(pipe) and pipe_exists(pipe, present)
+            detail["user_instance_logs"].append({"instance": inst.name, "pipe": pipe, "running": alive})
+            if alive:
+                user_pipes.append((mtime, pipe))
+    service = []
+    for name in present or []:
+        low = name.lower()
+        if low == "sql\\query" or (low.startswith("mssql$") and low.endswith("\\sql\\query")):
+            service.append(PIPE_PREFIX + name)
+    detail["service_pipes"] = service
+    cands = [p for _, p in sorted(user_pipes, reverse=True)] + service
+    return cands, detail
+
+
+def explain(detail: dict, database_match: str | None) -> str:
+    """One plain sentence on why the database wasn't found."""
+    db = database_match or "the scale software's database"
+    acct = detail.get("account", "this account")
+    logs = detail.get("user_instance_logs") or []
+    if not detail.get("pipes_listed", True):
+        return "Windows did not let the agent list SQL Server connections on this PC."
+    if not logs and not detail.get("service_pipes"):
+        return (f"No SQL Server is running for {acct} on this PC. If the scale software runs under a different "
+                "Windows account, pair and run the agent while signed in as that account.")
+    if logs and not any(entry.get("running") for entry in logs) and not detail.get("service_pipes"):
+        return (f"{acct}'s SQL Server user instance is not running: the scale software is closed, or its "
+                "database was closed after being idle.")
+    return (f"{db} is not open in any SQL Server on this PC that {acct} can reach. Check the scale software is "
+            "open, and that the agent runs as the same Windows account as the scale software.")
+
+
+def find_running_instance(base: Path | None = None, exists=None) -> str | None:
+    """The pipe of this account's running user instance, or None (kept for the
+    pairing window and selftest)."""
+    if exists is not None:          # tests: decide pipe existence directly
+        base = base or sql_data_dir()
+        if not base.is_dir():
+            return None
+        best = None
+        for inst in base.iterdir():
+            log = inst / "error.log"
+            if not log.is_file():
+                continue
             pipe = latest_pipe_in_log(read_log(log))
-        except OSError:
-            continue
-        if pipe and exists(pipe):
-            mtime = log.stat().st_mtime
-            if best is None or mtime > best[0]:
-                best = (mtime, pipe)
-    return best[1] if best else None
+            if pipe and exists(pipe):
+                m = log.stat().st_mtime
+                if best is None or m > best[0]:
+                    best = (m, pipe)
+        return best[1] if best else None
+    cands, detail = find_candidates(base)
+    running = [e["pipe"] for e in detail["user_instance_logs"] if e.get("running")]
+    return running[0] if running else None
 
 
 # --------------------------------------------------------------------------- #
@@ -117,8 +203,8 @@ class SelectOnlyCursor:
 class SelectOnlyConnection:
     """What the mapping code gets: SELECT or nothing."""
 
-    def __init__(self, conn, driver: str, database: str):
-        self._conn, self.driver, self.database = conn, driver, database
+    def __init__(self, conn, driver: str, database: str, target: str | None = None):
+        self._conn, self.driver, self.database, self.target = conn, driver, database, target
 
     def cursor(self):
         return SelectOnlyCursor(self._conn.cursor())
@@ -174,6 +260,31 @@ def classify(exc: Exception) -> LocalDbError:
     return LocalDbError("connect_failed", "Connecting to the scale database failed", msg[:500])
 
 
+def open_first(candidates: list[str], database_match: str, opener=None, refused=None) -> SelectOnlyConnection:
+    """Open the first candidate that has the database. A service instance that
+    doesn't have it, or doesn't let this account in, is simply not the one
+    (`refused(candidate)` is told about the latter, so it can be skipped)."""
+    opener = opener or open_scale_database
+    for c in candidates:
+        try:
+            return opener(c, database_match)
+        except LocalDbError as exc:
+            is_service = not _is_user_instance(c)
+            if is_service and exc.code in ("login_failed", "instance_unreachable"):
+                if refused:
+                    refused(c)
+                continue
+            if exc.code == "database_not_found":
+                continue
+            raise
+    raise LocalDbError("database_not_found", f"No database ending in {database_match} is open",
+                       "Open the scale software on this PC; the agent reads only while it runs.")
+
+
+def _is_user_instance(pipe: str) -> bool:
+    return pipe.lower().endswith("\\tsql\\query")
+
+
 def open_scale_database(pipe: str, database_match: str, driver: str | None = None) -> SelectOnlyConnection:
     """Connect over the instance's pipe, find the database whose name ends with
     `database_match` (e.g. LOCALSET.MDF), and reconnect to it read-only."""
@@ -200,6 +311,6 @@ def open_scale_database(pipe: str, database_match: str, driver: str | None = Non
         raise LocalDbError("database_not_found", f"No database ending in {database_match} is open",
                            "Open the scale software on this PC; the agent reads only while it runs.")
     try:
-        return SelectOnlyConnection(_open(_odbc_str(server, driver, names[0])), driver, names[0])
+        return SelectOnlyConnection(_open(_odbc_str(server, driver, names[0])), driver, names[0], pipe)
     except pyodbc.Error as exc:
         raise classify(exc) from None

@@ -91,6 +91,13 @@ export type AgentStatus = {
   database?: string | null;
   driver?: string | null;
   error?: { code: string; cause: string; fix?: string } | null;
+  detail?: {
+    reason: string;
+    account: string;
+    user_instance_folder: string;
+    service_pipes: string[];
+    user_instance_logs: { instance: string; pipe: string | null; running: boolean; error?: string }[];
+  } | null;
   clock_skew_s?: number | null;
 };
 

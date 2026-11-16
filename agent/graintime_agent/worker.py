@@ -13,7 +13,6 @@ Each cycle:
 
 from __future__ import annotations
 
-import getpass
 import logging
 import platform
 import time
@@ -25,7 +24,7 @@ from graintime.common.profiles import ProfileConfig
 
 from . import VERSION
 from .client import ServerError
-from .localdb import LocalDbError, find_running_instance, open_scale_database
+from .localdb import LocalDbError, explain, find_candidates, open_first, open_scale_database, windows_user
 
 log = logging.getLogger("graintime_agent")
 
@@ -33,17 +32,15 @@ BACKFILL_PAGE = 500
 BACKFILL_PAUSE_S = 1.0
 IDLE_SYNC_S = 60
 MAX_ERROR_SLEEP_S = 30 * 60
+SERVICE_RETRY_S = 3600
+
+
+def _is_user_pipe(pipe: str) -> bool:
+    return pipe.lower().endswith("\\tsql\\query")
 
 
 def encode_rows(rows: list[dict]) -> list[dict]:
     return [{k: encode_value(v) for k, v in r.items()} for r in rows]
-
-
-def windows_user() -> str:
-    import os
-    dom = os.environ.get("USERDOMAIN")
-    user = os.environ.get("USERNAME") or getpass.getuser()
-    return f"{dom}\\{user}" if dom else user
 
 
 def as_error(exc: Exception) -> dict:
@@ -59,78 +56,110 @@ def as_error(exc: Exception) -> dict:
 
 
 class Worker:
-    def __init__(self, server, find_instance=find_running_instance, open_db=open_scale_database,
+    def __init__(self, server, find_instance=find_candidates, open_db=open_scale_database,
                  sleep=time.sleep):
         self.server, self.find_instance, self.open_db, self.sleep = server, find_instance, open_db, sleep
         self.instructions: dict | None = None
         self.failures = 0
+        self.found_at: str | None = None        # where the database was last found (tried first)
+        self.skip_until: dict[str, float] = {}  # service instances that refused this account
+
+    def _candidates(self) -> tuple[list[str], dict]:
+        got = self.find_instance()
+        if isinstance(got, tuple):
+            cands, detail = got
+        else:                                  # a single pipe or None
+            cands, detail = ([got] if got else []), {}
+        now = time.monotonic()
+        cands = [c for c in cands if self.skip_until.get(c, 0) <= now]
+        if self.found_at in cands:
+            cands = [self.found_at] + [c for c in cands if c != self.found_at]
+        return cands, detail
+
+    def _open(self, cands: list[str], match: str):
+        def refused(c):   # don't knock on a service that refused us every minute
+            self.skip_until[c] = time.monotonic() + SERVICE_RETRY_S
+        conn = open_first(cands, match, opener=self.open_db, refused=refused)
+        self.found_at = getattr(conn, "target", None) or self.found_at
+        return conn
 
     # -- one cycle ---------------------------------------------------------- #
 
     def cycle(self) -> float:
         """Run one cycle; return seconds to wait before the next."""
-        pipe = self.find_instance()
-        status = {"instance": "running" if pipe else "not_running", "database": None,
-                  "driver": None, "error": None, "active_job_id": None}
-        poll = None
+        cands, detail = self._candidates()
         ins = self.instructions or {}
-        if pipe and ins.get("poll") and ins.get("database_match"):
+        match = ins.get("database_match")
+        status = {"instance": "not_running", "database": None, "driver": None, "error": None,
+                  "active_job_id": None, "detail": None}
+        poll, conn = None, None
+        if cands and match:
+            # One short connection: confirms where the database is open, and
+            # is used for this cycle's poll or job, then closed.
             try:
-                poll = self._poll(pipe, ins, status)
-            except Exception as exc:          # reported to GrainTime, shown on the site page
-                status["error"] = as_error(exc)
-                log.warning("poll failed: %s", status["error"].get("cause"))
-        resp = self.server.post("/api/agent/sync", {
-            "agent": {"version": VERSION, "hostname": platform.node(), "windows_user": windows_user(),
-                      "clock_utc": datetime.now(timezone.utc).isoformat()},
-            "status": status, **({"poll": poll} if poll else {})})
-        first = self.instructions is None or (self.instructions.get("poll") or {}).get("fingerprint") != \
-            (resp.get("poll") or {}).get("fingerprint")
-        self.instructions = resp
-        if resp.get("message"):
-            log.info("server says: %s", resp["message"])
-        if resp.get("job") and pipe:
-            self._run_job(pipe, resp["job"], resp.get("database_match"))
-            return 1
-        if first and resp.get("poll") and pipe and poll is None:
+                conn = self._open(cands, match)
+                status.update(instance="running", database=conn.database, driver=conn.driver)
+            except LocalDbError as exc:
+                if exc.code != "database_not_found":
+                    status["instance"] = "running"
+                    status["error"] = exc.as_dict()
+                    log.warning("scale database: %s", exc.cause)
+        elif cands and _is_user_pipe(cands[0]):
+            status["instance"] = "running"         # no profile yet: a running user instance is enough to say so
+        if status["instance"] == "not_running":
+            status["detail"] = {**detail, "reason": explain(detail, match)}
+        try:
+            if conn is not None and ins.get("poll"):
+                try:
+                    poll = self._poll(conn, ins)
+                except Exception as exc:          # reported to GrainTime, shown on the site page
+                    status["error"] = as_error(exc)
+                    log.warning("poll failed: %s", status["error"].get("cause"))
+            resp = self.server.post("/api/agent/sync", {
+                "agent": {"version": VERSION, "hostname": platform.node(), "windows_user": windows_user(),
+                          "clock_utc": datetime.now(timezone.utc).isoformat()},
+                "status": status, **({"poll": poll} if poll else {})})
+            first = self.instructions is None or (self.instructions.get("poll") or {}).get("fingerprint") != \
+                (resp.get("poll") or {}).get("fingerprint")
+            self.instructions = resp
+            if resp.get("message"):
+                log.info("server says: %s", resp["message"])
+            if resp.get("job") and conn is not None:
+                self._run_job(conn, resp["job"])
+                return 1
+        finally:
+            if conn is not None:
+                conn.close()
+        if first and (resp.get("poll") or resp.get("database_match")) and cands and poll is None:
             return 1                           # got a profile: take the first reading now
         return float(resp.get("next_sync_s") or IDLE_SYNC_S)
 
-    def _poll(self, pipe: str, ins: dict, status: dict) -> dict:
+    def _poll(self, conn, ins: dict) -> dict:
         p = ins["poll"]
         profile = ProfileConfig(**p["profile"])
-        conn = self.open_db(pipe, ins["database_match"])
-        status["database"], status["driver"] = conn.database, conn.driver
-        try:
-            got = read_poll_rows(SiteReader(conn, profile), p.get("high_water"), bool(p.get("recheck")))
-        finally:
-            conn.close()
+        got = read_poll_rows(SiteReader(conn, profile), p.get("high_water"), bool(p.get("recheck")))
         return {"fingerprint": p["fingerprint"], "high_water": got["high_water"],
                 "rows": encode_rows(got["rows"]), "rechecked": bool(p.get("recheck"))}
 
     # -- jobs ------------------------------------------------------------------ #
 
-    def _run_job(self, pipe: str, job: dict, database_match: str | None) -> None:
+    def _run_job(self, conn, job: dict) -> None:
         path = f"/api/agent/jobs/{job['id']}"
         log.info("running %s job %s", job["kind"], job["id"])
         try:
             profile = ProfileConfig(**job["profile"])
-            conn = self.open_db(pipe, database_match or profile.agent_database_match)
-            try:
-                reader = SiteReader(conn, profile)
-                if job["kind"] == "preview":
-                    limit = max(1, min(int(job["options"].get("limit") or 25), 100))
-                    got = read_preview_rows(reader, limit)
-                    self.server.post(path, {"rows": encode_rows(got["rows"]), "done": True,
-                                            "status_examples": {k: encode_rows(v) for k, v in
-                                                                got["status_examples"].items()}})
-                elif job["kind"] == "backfill":
-                    self._backfill(reader, profile, job, path)
-                else:
-                    self.server.post(path, {"error": {"code": "unsupported", "cause": f"Unknown job {job['kind']}",
-                                                      "fix": "Update the GrainTime Agent."}})
-            finally:
-                conn.close()
+            reader = SiteReader(conn, profile)
+            if job["kind"] == "preview":
+                limit = max(1, min(int(job["options"].get("limit") or 25), 100))
+                got = read_preview_rows(reader, limit)
+                self.server.post(path, {"rows": encode_rows(got["rows"]), "done": True,
+                                        "status_examples": {k: encode_rows(v) for k, v in
+                                                            got["status_examples"].items()}})
+            elif job["kind"] == "backfill":
+                self._backfill(reader, profile, job, path)
+            else:
+                self.server.post(path, {"error": {"code": "unsupported", "cause": f"Unknown job {job['kind']}",
+                                                  "fix": "Update the GrainTime Agent."}})
         except ServerError:
             raise
         except Exception as exc:

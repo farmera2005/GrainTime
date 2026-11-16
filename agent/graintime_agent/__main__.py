@@ -2,7 +2,8 @@
 
   (no arguments)   open the pairing window
   run              run the agent (started automatically at sign-in)
-  status           print pairing and database status
+  status           pairing and database status (status.txt, opened in Notepad)
+  diagnose         where the agent looked for the scale database and why (diagnose.txt, opened in Notepad)
   selftest         check this PC can run the agent (writes selftest.txt; used by the build)
 """
 
@@ -39,13 +40,64 @@ def run() -> int:
     return 0
 
 
-def status() -> int:
-    from .localdb import find_running_instance
+def _report(name: str, lines: list[str]) -> None:
+    """Write a report next to the log and show it (a windowed .exe has no console)."""
+    path = config.app_dir() / name
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        import os
+        os.startfile(str(path))      # opens in Notepad
+
+
+def diagnose_lines(open_db=None) -> list[str]:
+    from .localdb import explain, find_candidates, list_pipes, open_first, windows_user
     state = config.load()
-    print(f"GrainTime Agent {VERSION}")
-    print("Paired with:", f"{state['site']['name']} at {state['server']}" if state else "nothing yet")
-    print("Scale database running:", "yes" if find_running_instance() else "no")
-    print("Log:", config.app_dir() / "agent.log")
+    match = "LOCALSET.MDF"
+    lines = [f"GrainTime Agent {VERSION} diagnosis", f"Windows account: {windows_user()}",
+             f"Paired with: {state['site']['name'] + ' at ' + state['server'] if state else 'nothing yet'}",
+             f"Looking for a database ending in: {match}", ""]
+    cands, detail = find_candidates()
+    lines.append(f"User-instance folder: {detail['user_instance_folder']}")
+    if not detail["user_instance_logs"]:
+        lines.append("  (no SQL Server user instance has run for this account)")
+    for e in detail["user_instance_logs"]:
+        lines.append(f"  {e.get('instance')}: pipe {e.get('pipe') or 'none in error.log'} -> "
+                     f"{'RUNNING' if e.get('running') else 'not running'}{'  ' + e['error'] if e.get('error') else ''}")
+    lines.append(f"SQL Server services on this PC: {', '.join(detail['service_pipes']) or 'none'}")
+    pipes = list_pipes()
+    sql = [p for p in (pipes or []) if "sql" in p.lower()]
+    lines.append(f"SQL-related pipes: {', '.join(sql) if sql else 'none'}"
+                 + ("" if pipes is not None else "  (could not list pipes)"))
+    lines.append("")
+    if not cands:
+        lines.append("RESULT: not found. " + explain(detail, match))
+        return lines
+    try:
+        conn = open_first(cands, match, opener=open_db) if open_db else open_first(cands, match)
+        lines.append(f"RESULT: found {conn.database} via {conn.target} ({conn.driver})")
+        conn.close()
+    except Exception as exc:
+        cause = getattr(exc, "cause", None) or str(exc)
+        fix = getattr(exc, "fix", "")
+        lines.append(f"RESULT: not opened. {cause}. {fix}".strip())
+        lines.append(explain(detail, match))
+    return lines
+
+
+def diagnose() -> int:
+    _report("diagnose.txt", diagnose_lines())
+    return 0
+
+
+def status() -> int:
+    from .localdb import find_running_instance, windows_user
+    state = config.load()
+    _report("status.txt", [f"GrainTime Agent {VERSION}", f"Windows account: {windows_user()}",
+                           "Paired with: " + (f"{state['site']['name']} at {state['server']}" if state else "nothing yet"),
+                           "Scale software's user instance running: " + ("yes" if find_running_instance() else "no"),
+                           "Starts at sign-in: " + ("yes" if sys.platform == "win32" and winsetup.autostart_enabled() else "no"),
+                           f"Log: {config.app_dir() / 'agent.log'}", "For details run: GrainTimeAgent.exe diagnose"])
     return 0
 
 
@@ -87,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
         return run()
     if args and args[0] == "status":
         return status()
+    if args and args[0] == "diagnose":
+        return diagnose()
     if args and args[0] == "selftest":
         return selftest()
     if args and args[0] in ("version", "--version"):

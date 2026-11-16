@@ -8,4 +8,4 @@ scale software's database: it reads only while that database is already
 running, with one short connection per poll.
 """
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"

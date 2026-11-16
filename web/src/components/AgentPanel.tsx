@@ -59,6 +59,20 @@ export function AgentPanel({ site }: { site: Site }) {
           </div>
         </div>
       ) : null}
+      {st?.paired && st.instance === "not_running" && st.detail ? (
+        <Notice kind="warn">
+          <strong>{st.detail.reason}</strong>
+          {st.windows_user ? <div className="fix">The agent is running as <code>{st.windows_user}</code>. It must run as the same Windows account as the scale software.</div> : null}
+          <details>
+            <summary>What the agent checked</summary>
+            <ul className="small">
+              <li>SQL Server user instances for {st.detail.account}: {st.detail.user_instance_logs.length ? st.detail.user_instance_logs.map((l) => `${l.instance} (${l.running ? "running" : l.pipe ? "not running" : "no pipe in its log"})`).join(", ") : `none in ${st.detail.user_instance_folder}`}</li>
+              <li>SQL Server services on the PC: {st.detail.service_pipes.length ? st.detail.service_pipes.join(", ") : "none"}</li>
+            </ul>
+            <div className="small muted">For a full report, run <code>GrainTimeAgent.exe diagnose</code> on the scale PC (as the same account).</div>
+          </details>
+        </Notice>
+      ) : null}
       {st?.error ? (
         <Notice kind="error"><strong>{st.error.cause}</strong>{st.error.fix ? <div className="fix">{st.error.fix}</div> : null}</Notice>
       ) : null}

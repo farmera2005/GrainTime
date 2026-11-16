@@ -279,6 +279,7 @@ class AgentStatus(BaseModel):
     driver: str | None = Field(default=None, max_length=100)
     error: dict | None = None                                     # {code, cause, fix}
     active_job_id: int | None = None
+    detail: dict | None = None        # why the database wasn't found: reason + what was checked
 
 
 class PollIn(BaseModel):
@@ -298,6 +299,21 @@ def _error(e: dict | None) -> dict | None:
     if not e:
         return None
     return {k: str(e.get(k))[:500] for k in ("code", "cause", "fix") if e.get(k) is not None}
+
+
+def _detail(d: dict | None) -> dict | None:
+    """What the agent checked, trimmed to plain, small values (shown to admins)."""
+    if not d:
+        return None
+    out = {"reason": str(d.get("reason") or "")[:500], "account": str(d.get("account") or "")[:150],
+           "user_instance_folder": str(d.get("user_instance_folder") or "")[:300],
+           "service_pipes": [str(p)[:200] for p in (d.get("service_pipes") or [])][:10],
+           "user_instance_logs": [{"instance": str(e.get("instance") or "")[:100],
+                                   "pipe": str(e.get("pipe") or "")[:200] or None,
+                                   "running": bool(e.get("running")),
+                                   **({"error": str(e["error"])[:200]} if e.get("error") else {})}
+                                  for e in (d.get("user_instance_logs") or [])[:10] if isinstance(e, dict)]}
+    return out
 
 
 def _recheck_due(state: SiteCollectorState | None, now: datetime) -> bool:
@@ -321,7 +337,8 @@ def _sync(db: DbSession, a: SiteAgent, site: Site, payload: dict) -> dict:
         a.clock_skew_s = int((cu - now).total_seconds())
     err = _error(body.status.error)
     a.status = {"instance": body.status.instance, "database": body.status.database,
-                "driver": body.status.driver, "error": err, "at": now.isoformat()}
+                "driver": body.status.driver, "error": err, "detail": _detail(body.status.detail),
+                "at": now.isoformat()}
 
     default = int(settings_store.get_globals(db)["poll_interval_s"])
     interval = site.poll_interval_s or default

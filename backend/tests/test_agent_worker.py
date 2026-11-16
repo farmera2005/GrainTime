@@ -16,8 +16,9 @@ os.environ.setdefault("GRAINTIME_AGENT_TEST_NO_DPAPI", "1")
 
 from graintime_agent import config as agent_config  # noqa: E402
 from graintime_agent.client import Server, ServerError  # noqa: E402
-from graintime_agent.localdb import (SelectOnlyConnection, find_running_instance,  # noqa: E402
-                                     latest_pipe_in_log, read_log)
+from graintime_agent.localdb import (LocalDbError, SelectOnlyConnection, explain,  # noqa: E402
+                                     find_candidates, find_running_instance, latest_pipe_in_log,
+                                     open_first, pipe_exists, read_log)
 from graintime_agent.worker import Worker  # noqa: E402
 
 from graintime.common.profiles import AGVANTAGE_PC  # noqa: E402
@@ -37,6 +38,70 @@ def test_pipe_found_in_utf16_error_log(tmp_path):
     # Pipe gone = the scale software closed its database: nothing to read, nothing started.
     assert find_running_instance(tmp_path, exists=lambda p: False) is None
     assert find_running_instance(tmp_path / "missing") is None
+
+
+# --------------------------------------------------------------------------- #
+# Finding where the scale database is open (pipes are listed, never opened)
+# --------------------------------------------------------------------------- #
+
+def _logs(tmp_path, pipe_line=LOG):
+    inst = tmp_path / "SQLEXPRESS"
+    inst.mkdir(exist_ok=True)
+    (inst / "error.log").write_bytes(b"\xff\xfe" + pipe_line.encode("utf-16-le"))
+    return tmp_path
+
+
+def test_pipe_existence_is_checked_by_listing_case_insensitively():
+    listed = ["InitShutdown", "6e45ab3d-7514-4d\\tsql\\query", "MSSQL$SQLEXPRESS\\sql\\query"]
+    assert pipe_exists("\\\\.\\pipe\\6E45AB3D-7514-4D\\tsql\\query", listed)
+    assert not pipe_exists("\\\\.\\pipe\\0000\\tsql\\query", listed)
+
+
+def test_candidates_user_instance_first_then_services(tmp_path):
+    base = _logs(tmp_path)
+    cands, detail = find_candidates(base, ["6E45AB3D-7514-4D\\tsql\\query", "MSSQL$SQLEXPRESS\\sql\\query",
+                                           "sql\\query", "lsass"])
+    assert cands == ["\\\\.\\pipe\\6E45AB3D-7514-4D\\tsql\\query", "\\\\.\\pipe\\MSSQL$SQLEXPRESS\\sql\\query",
+                     "\\\\.\\pipe\\sql\\query"]
+    assert detail["user_instance_logs"][0]["running"] is True
+
+
+def test_user_instance_not_running_is_explained(tmp_path):
+    base = _logs(tmp_path)
+    cands, detail = find_candidates(base, ["lsass"])          # its pipe is gone
+    assert cands == [] and detail["user_instance_logs"][0]["running"] is False
+    assert "user instance is not running" in explain(detail, "LOCALSET.MDF")
+
+
+def test_wrong_windows_account_is_explained(tmp_path, monkeypatch):
+    monkeypatch.setenv("USERDOMAIN", "MERCERLANDMARK")
+    monkeypatch.setenv("USERNAME", "itadmin")
+    cands, detail = find_candidates(tmp_path / "none", ["lsass"])
+    msg = explain(detail, "LOCALSET.MDF")
+    assert cands == [] and "MERCERLANDMARK\\itadmin" in msg and "different Windows account" in msg
+
+
+def test_open_first_skips_services_without_the_database_or_access():
+    tried, refused = [], []
+
+    def opener(c, match):
+        tried.append(c)
+        if c.endswith("A\\sql\\query"):
+            raise LocalDbError("login_failed", "refused", "")
+        if c.endswith("B\\sql\\query"):
+            raise LocalDbError("database_not_found", "no db", "")
+        return SelectOnlyConnection(_Conn(), "drv", "LOCALSET.MDF", c)
+    svc = ["\\\\.\\pipe\\MSSQL$A\\sql\\query", "\\\\.\\pipe\\MSSQL$B\\sql\\query", "\\\\.\\pipe\\MSSQL$C\\sql\\query"]
+    conn = open_first(svc, "LOCALSET.MDF", opener=opener, refused=refused.append)
+    assert conn.target.endswith("C\\sql\\query") and refused == [svc[0]] and len(tried) == 3
+    with pytest.raises(LocalDbError) as e:
+        open_first(svc[:2], "LOCALSET.MDF", opener=opener)
+    assert e.value.code == "database_not_found"
+    # A user instance that refuses the account is a real problem, not "not here".
+    with pytest.raises(LocalDbError) as e:
+        open_first(["\\\\.\\pipe\\X\\tsql\\query"], "LOCALSET.MDF",
+                   opener=lambda c, m: (_ for _ in ()).throw(LocalDbError("login_failed", "no", "")))
+    assert e.value.code == "login_failed"
 
 
 class _Cur:
@@ -104,7 +169,7 @@ def mock_db_opener(pipe, database_match):
         f"PWD={{{os.environ['GMS_TEST_SA_PASSWORD']}}};TrustServerCertificate=yes;DATABASE={{{DB_NAME}}}",
         autocommit=True, timeout=5, readonly=True)
     conn.cursor().execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 5000;")
-    return SelectOnlyConnection(conn, "ODBC Driver 18 for SQL Server", DB_NAME)
+    return SelectOnlyConnection(conn, "ODBC Driver 18 for SQL Server", DB_NAME, pipe)
 
 
 def transport_for(client):
@@ -127,8 +192,10 @@ def test_agent_end_to_end(admin_client):
     got = Server("http://graintime", transport=t).pair(code, "DESKTOP-512", "MERCERLANDMARK\\nwscale")
     server = Server("http://graintime", got["key_id"], got["secret"], transport=t)
     running = {"pipe": "\\\\.\\pipe\\X\\tsql\\query"}
-    w = Worker(server, find_instance=lambda: running["pipe"], open_db=mock_db_opener, sleep=lambda s: None)
+    w = Worker(server, find_instance=lambda: ([running["pipe"]] if running["pipe"] else [], {"account": "X\\nwscale"}),
+               open_db=mock_db_opener, sleep=lambda s: None)
 
+    assert w.cycle() == 1                              # first sync: learns the database name, re-checks now
     assert w.cycle() > 1                               # polling is off: status only
     assert admin_client.get(f"/api/admin/sites/{site['id']}/agent").json()["instance"] == "running"
     admin_client.patch(f"/api/admin/sites/{site['id']}", json={"polling_enabled": True})
@@ -164,10 +231,12 @@ def test_agent_end_to_end(admin_client):
         assert types <= {"P", "S"}
         assert db.query(Ticket).filter(Ticket.site_id == site["id"], Ticket.duration_s.isnot(None)).count() > 0
 
-    # Scale software closed: nothing read, site goes stale on its own, no error.
+    # Scale software closed: nothing read, site goes stale on its own, no error,
+    # and the page says why the database wasn't found.
     running["pipe"] = None
     w.cycle()
-    assert admin_client.get(f"/api/admin/sites/{site['id']}/agent").json()["instance"] == "not_running"
+    st = admin_client.get(f"/api/admin/sites/{site['id']}/agent").json()
+    assert st["instance"] == "not_running" and st["detail"]["reason"]
     assert admin_client.get(f"/api/admin/sites/{site['id']}/collection").json()["state"]["last_error"] is None
 
     # Revoked: the agent is locked out.
@@ -175,3 +244,30 @@ def test_agent_end_to_end(admin_client):
     running["pipe"] = "\\\\.\\pipe\\X\\tsql\\query"
     with pytest.raises(ServerError):
         w.cycle()
+
+
+
+@needs_mock
+def test_service_instance_without_the_database_reports_not_running(admin_client):
+    """A PC whose SQLEXPRESS service doesn't have LOCALSET attached: checked,
+    not mistaken for the database, explained on the page."""
+    prof = admin_client.post("/api/admin/mapping-profiles", json={"name": "AgVantagePC", "description": None,
+                                                                   "config": AGVANTAGE_PC}).json()
+    site = admin_client.post("/api/admin/sites/agent", json={"name": "Coldwater", "code": "COLD"}).json()
+    assert site["mapping_profile_id"] == prof["id"]
+    code = admin_client.post(f"/api/admin/sites/{site['id']}/agent/pairing-code").json()["code"]
+    t = transport_for(admin_client)
+    got = Server("http://graintime", transport=t).pair(code, "SCALEPC", "MERCERLANDMARK\\itadmin")
+    svc = "\\\\.\\pipe\\MSSQL$SQLEXPRESS\\sql\\query"
+
+    def no_db(c, match):
+        raise LocalDbError("database_not_found", "none", "")
+    w = Worker(Server("http://graintime", got["key_id"], got["secret"], transport=t),
+               find_instance=lambda: ([svc], {"account": "MERCERLANDMARK\\itadmin", "user_instance_logs": [],
+                                              "service_pipes": [svc], "user_instance_folder": "C:\\x"}),
+               open_db=no_db, sleep=lambda s: None)
+    w.cycle()
+    w.cycle()
+    st = admin_client.get(f"/api/admin/sites/{site['id']}/agent").json()
+    assert st["instance"] == "not_running" and st["error"] is None
+    assert "LOCALSET.MDF is not open" in st["detail"]["reason"] and st["detail"]["service_pipes"] == [svc]

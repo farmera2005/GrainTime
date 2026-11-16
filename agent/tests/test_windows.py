@@ -38,3 +38,11 @@ def test_missing_pipe_is_not_running():
 def test_single_instance_guard():
     from graintime_agent import winsetup
     assert winsetup.single_instance() is True
+
+
+def test_pipes_are_listed_without_opening_them():
+    from graintime_agent.localdb import find_candidates, list_pipes
+    pipes = list_pipes()
+    assert pipes is not None and len(pipes) > 0          # Windows always has some named pipes
+    cands, detail = find_candidates()
+    assert detail["pipes_listed"] is True and isinstance(cands, list)
