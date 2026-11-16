@@ -271,3 +271,57 @@ def test_service_instance_without_the_database_reports_not_running(admin_client)
     st = admin_client.get(f"/api/admin/sites/{site['id']}/agent").json()
     assert st["instance"] == "not_running" and st["error"] is None
     assert "LOCALSET.MDF is not open" in st["detail"]["reason"] and st["detail"]["service_pipes"] == [svc]
+
+
+# --------------------------------------------------------------------------- #
+# Silent install (command line)
+# --------------------------------------------------------------------------- #
+
+from graintime_agent import installer  # noqa: E402
+
+
+@pytest.fixture
+def agent_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRAINTIME_AGENT_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GRAINTIME_AGENT_PROGRAMDATA", str(tmp_path / "pd"))
+    monkeypatch.setenv("USERNAME", "nwscale")
+    monkeypatch.setenv("USERDOMAIN", "MERCERLANDMARK")
+    return tmp_path
+
+
+@pytest.mark.parametrize("argv,code", [
+    (["--bogus"], installer.USAGE),
+    (["--code", "ABCD-EFGH"], installer.USAGE),                 # code without server
+    (["--server", "http://gt:8080"], installer.USAGE),          # server without code
+    (["--server", "not a url", "--code", "X"], installer.USAGE),
+    ([], installer.NOTHING),                                    # update, but nothing installed
+    (["--server", "http://127.0.0.1:9", "--code", "ABCD-EFGH"], installer.UNREACHABLE),
+    (["--user", "MERCERLANDMARK\\nwscale", "--server", "http://gt:8080", "--code", "X"], installer.WRONG_CONTEXT),
+])
+def test_install_exit_codes(agent_home, argv, code):
+    assert installer.cli("install", argv) == code
+    log = (agent_home / ("pd" if "--user" in argv else "home") / "install.log").read_text()
+    assert "FAILED" in log and "ABCD-EFGH" not in log           # the pairing code is never logged
+
+
+def test_install_refuses_to_run_as_system(agent_home, monkeypatch):
+    monkeypatch.setenv("USERNAME", "SCALEPC$")
+    assert installer.cli("install", ["--server", "http://gt:8080", "--code", "X"]) == installer.WRONG_CONTEXT
+
+
+def test_silent_install_pairs_and_saves(agent_home, admin_client):
+    prof = admin_client.post("/api/admin/mapping-profiles", json={"name": "AgVantagePC", "description": None,
+                                                                   "config": AGVANTAGE_PC}).json()
+    site = admin_client.post("/api/admin/sites/agent", json={"name": "Rockford", "code": "ROCK"}).json()
+    assert site["mapping_profile_id"] == prof["id"]
+    code = admin_client.post(f"/api/admin/sites/{site['id']}/agent/pairing-code").json()["code"]
+    t = transport_for(admin_client)
+    with pytest.raises(installer.InstallError) as e:
+        installer.pair_and_install("http://graintime", "WRNG-CODE", transport=t)
+    assert e.value.code == installer.REFUSED
+    got = installer.pair_and_install("http://graintime", code, log=lambda m: None, transport=t)
+    assert got["code"] == "ROCK" and agent_config.load()["site"]["name"] == "Rockford"
+    st = admin_client.get(f"/api/admin/sites/{site['id']}/agent").json()
+    assert st["paired"] and st["windows_user"] == "MERCERLANDMARK\\nwscale"
+    assert installer.cli("install", []) == installer.OK            # now an update in place
+    assert installer.cli("uninstall", []) == installer.OK and agent_config.load() is None

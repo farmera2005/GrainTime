@@ -101,8 +101,12 @@ def single_instance() -> bool:
 
 
 def stop_running_agents() -> None:
-    """Stop other copies of the agent (used before removing or re-pairing)."""
+    """Stop this account's other copies of the agent (before updating, re-pairing
+    or removing). Other accounts' agents on the same PC are left alone."""
     if sys.platform == "win32":
         me = os.getpid()
-        subprocess.run(["taskkill", "/F", "/FI", f"PID ne {me}", "/IM", f"{APP_NAME}.exe"],
-                       capture_output=True, creationflags=0x08000000)
+        user = os.environ.get("USERNAME", "")
+        dom = os.environ.get("USERDOMAIN", "")
+        who = f"{dom}\\{user}" if dom else user
+        subprocess.run(["taskkill", "/F", "/FI", f"PID ne {me}", "/FI", f"USERNAME eq {who}",
+                        "/IM", f"{APP_NAME}.exe"], capture_output=True, creationflags=0x08000000)

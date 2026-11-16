@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import platform
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import VERSION, config, winsetup
-from .client import Server, ServerError
+from . import VERSION, config, installer, winsetup
 from .localdb import find_running_instance
 from .worker import windows_user
 
@@ -52,20 +50,12 @@ def run_setup_window() -> None:
             messagebox.showerror("GrainTime Agent", "Enter the GrainTime address (http://…) and the pairing code.")
             return
         try:
-            got = Server(url).pair(code, platform.node(), windows_user())
-        except ServerError as exc:
-            messagebox.showerror("GrainTime Agent", exc.detail)
+            site = installer.pair_and_install(url, code)
+        except installer.InstallError as exc:
+            messagebox.showerror("GrainTime Agent", exc.message)
             return
-        except OSError as exc:
-            messagebox.showerror("GrainTime Agent", f"Could not reach GrainTime at {url}:\n{exc}")
-            return
-        winsetup.stop_running_agents()
-        config.save(url, got["key_id"], got["secret"], got["site"])
-        exe = winsetup.install_copy()
-        winsetup.enable_autostart(exe)
-        winsetup.start_background(exe)
         messagebox.showinfo("GrainTime Agent",
-                            f"Paired with {got['site']['name']}.\n\nThe agent is running now and starts "
+                            f"Paired with {site['name']}.\n\nThe agent is running now and starts "
                             f"automatically whenever {windows_user()} signs in. Turn on polling for the site "
                             "in GrainTime to start collecting.")
         root.destroy()
@@ -73,11 +63,8 @@ def run_setup_window() -> None:
     def do_update():
         """Replace the installed agent with this copy; keep the pairing."""
         try:
-            winsetup.stop_running_agents()
-            exe = winsetup.install_copy()
-            winsetup.enable_autostart(exe)
-            winsetup.start_background(exe)
-        except OSError as exc:
+            installer.update_in_place(lambda m: None)
+        except (OSError, installer.InstallError) as exc:
             messagebox.showerror("GrainTime Agent", f"Could not update the agent:\n{exc}")
             return
         messagebox.showinfo("GrainTime Agent", f"Updated to version {VERSION}. The agent is running again, "
@@ -87,9 +74,7 @@ def run_setup_window() -> None:
     def do_remove():
         if not messagebox.askyesno("GrainTime Agent", "Stop the agent on this PC and forget its pairing?"):
             return
-        winsetup.stop_running_agents()
-        winsetup.disable_autostart()
-        config.forget()
+        installer.uninstall(lambda m: None)
         messagebox.showinfo("GrainTime Agent", "Removed. Revoke the agent on the site's page in GrainTime too.")
         root.destroy()
 

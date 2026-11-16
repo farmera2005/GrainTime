@@ -47,6 +47,11 @@ jobs:
           $p = Start-Process dist\GrainTimeAgent.exe -ArgumentList "selftest" -Wait -PassThru
           Get-Content "$env:GRAINTIME_AGENT_HOME\selftest.txt"
           if ($p.ExitCode -ne 0) { throw "selftest failed" }
+          # Silent install reports through its exit code: GrainTime unreachable = 4.
+          $p = Start-Process dist\GrainTimeAgent.exe -ArgumentList "install","--server","http://127.0.0.1:9","--code","TEST-CODE" -Wait -PassThru
+          Get-Content "$env:GRAINTIME_AGENT_HOME\install.log"
+          if ($p.ExitCode -ne 4) { throw "silent install returned $($p.ExitCode), expected 4" }
+          if (Select-String -Path "$env:GRAINTIME_AGENT_HOME\install.log" -Pattern "TEST-CODE" -Quiet) { throw "pairing code was logged" }
       - uses: actions/upload-artifact@v4
         with:
           name: GrainTimeAgent

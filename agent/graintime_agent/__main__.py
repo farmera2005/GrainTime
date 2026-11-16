@@ -5,6 +5,9 @@
   status           pairing and database status (status.txt, opened in Notepad)
   diagnose         where the agent looked for the scale database and why (diagnose.txt, opened in Notepad)
   selftest         check this PC can run the agent (writes selftest.txt; used by the build)
+  install --server URL --code CODE [--user DOMAIN\\account]   silent install (see installer.py)
+  install          update an existing install in place, keeping its pairing
+  uninstall [--user DOMAIN\\account]
 """
 
 from __future__ import annotations
@@ -141,6 +144,9 @@ def main(argv: list[str] | None = None) -> int:
         return status()
     if args and args[0] == "diagnose":
         return diagnose()
+    if args and args[0] in ("install", "uninstall", "setup-pending"):
+        from .installer import cli
+        return cli(args[0], args[1:])
     if args and args[0] == "selftest":
         return selftest()
     if args and args[0] in ("version", "--version"):

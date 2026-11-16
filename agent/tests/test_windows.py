@@ -46,3 +46,41 @@ def test_pipes_are_listed_without_opening_them():
     assert pipes is not None and len(pipes) > 0          # Windows always has some named pipes
     cands, detail = find_candidates()
     assert detail["pipes_listed"] is True and isinstance(cands, list)
+
+
+def _whoami():
+    import os
+    return f"{os.environ['USERDOMAIN']}\\{os.environ['USERNAME']}"
+
+
+def test_staged_install_for_another_account_registers_task_and_locks_the_code(tmp_path, monkeypatch):
+    """--user from an administrator: pairing file only readable by that account
+    and admins, a logon task running as that account, then removal."""
+    import subprocess
+
+    from graintime_agent import installer
+    monkeypatch.setenv("GRAINTIME_AGENT_PROGRAMDATA", str(tmp_path / "pd"))
+    assert installer.is_admin()                       # the build runner is an administrator
+    user = _whoami()
+    rc = installer.cli("install", ["--user", user, "--server", "http://127.0.0.1:9", "--code", "TEST-CODE"])
+    try:
+        assert rc == installer.OK, (tmp_path / "pd" / "install.log").read_text()
+        pending = installer.pending_path(user)
+        assert pending.exists()
+        acl = subprocess.run(["icacls", str(pending)], capture_output=True, text=True).stdout
+        assert "BUILTIN\\Users" not in acl and "Everyone" not in acl
+        task = f"{installer.TASK_PREFIX} ({installer._safe_name(user)})"
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              f"(Get-ScheduledTask -TaskName '{task}').Principal.LogonType"],
+                             capture_output=True, text=True).stdout
+        assert "Interactive" in out
+        assert "TEST-CODE" not in (tmp_path / "pd" / "install.log").read_text()
+    finally:
+        assert installer.cli("uninstall", ["--user", user]) == installer.OK
+    assert not installer.pending_path(user).exists()
+
+
+def test_bad_account_name_is_refused(tmp_path, monkeypatch):
+    from graintime_agent import installer
+    monkeypatch.setenv("GRAINTIME_AGENT_PROGRAMDATA", str(tmp_path / "pd"))
+    assert installer.cli("install", ["--user", "bad;name", "--server", "http://x:1", "--code", "C"]) == installer.USAGE

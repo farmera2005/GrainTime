@@ -53,6 +53,69 @@ agent to another PC, create a new pairing code and pair there; to
 stop it, click **Disconnect the PC** in GrainTime and **Remove from this PC**
 in the agent window.
 
+## Silent / remote install
+
+Each scale PC needs a pairing code for **its own site** (Configuration →
+Sites → the site → GrainTime Agent → Create pairing code; it works once,
+within 24 hours). The agent must end up running as the **Windows account
+that runs AgVantagePC**, so pick the form that matches how your tool runs
+commands. Nothing is shown on screen either way.
+
+**A. Your tool runs as the signed-in user** (PDQ Deploy "Run As: Logged on
+User", Intune Win32 app with install behaviour *User*, a GPO user logon
+script), with the scale account signed in:
+
+```bat
+GrainTimeAgent.exe install --server http://graintime:8080 --code ABCD-1234
+```
+
+**B. Your tool runs as an administrator or SYSTEM** (PsExec, Intune *System*,
+`Invoke-Command`, PDQ "Deploy User"): name the scale account with `--user`:
+
+```bat
+GrainTimeAgent.exe install --server http://graintime:8080 --code ABCD-1234 --user MERCERLANDMARK\nwscale
+```
+
+This copies the program to `C:\ProgramData\GrainTimeAgent\`, leaves the
+pairing code in a file only that account (and administrators) can read, and
+registers the task **GrainTime Agent setup (…)**, which runs as that account
+only while it is signed in, so no password is needed. The install finishes
+straight away if the account is signed in, otherwise at its next sign-in.
+With PowerShell remoting:
+
+```powershell
+Copy-Item .\GrainTimeAgent.exe \\SCALEPC\C$\Windows\Temp\
+Invoke-Command -ComputerName SCALEPC -ScriptBlock {
+  $p = Start-Process C:\Windows\Temp\GrainTimeAgent.exe -Wait -PassThru -ArgumentList `
+       'install','--server','http://graintime:8080','--code','ABCD-1234','--user','MERCERLANDMARK\nwscale'
+  $p.ExitCode
+}
+```
+
+Either way, the site's page in GrainTime shows **Agent: Online** within a
+minute of the install finishing.
+
+**Updating:** run `GrainTimeAgent.exe install` with no code: as the scale
+account (A) it replaces that account's copy and keeps the pairing; with
+`--user` (B) the task does the same at the account's next sign-in (or at
+once if signed in). **Removing:** `GrainTimeAgent.exe uninstall` as the scale
+account; `uninstall --user …` (as admin) removes the setup task and any unused
+pairing code. Also click **Disconnect the PC** in GrainTime.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Done (for `--user`: staged; finishes as that account) |
+| 2 | Wrong arguments (the log says which) |
+| 3 | GrainTime refused the pairing code (wrong, used or older than 24 hours): create a new one |
+| 4 | GrainTime unreachable from the PC (address, network, firewall) |
+| 5 | Wrong account or rights: SYSTEM without `--user`, or `--user` without admin rights |
+| 6 | `install` without a code, but this account has no agent to update |
+| 1 | Anything else (see the log) |
+
+The log is `install.log` in `%LOCALAPPDATA%\GrainTimeAgent\` (A), or
+`C:\ProgramData\GrainTimeAgent\` (B; the staged task then logs in the scale
+account's folder). The pairing code is never written to a log.
+
 ## Where things are on the PC
 
 | | |
