@@ -33,7 +33,8 @@ def run_setup_window() -> None:
         ttk.Label(frm, text=f"Paired with {site.get('name')} ({site.get('code')})\nGrainTime: {state['server']}\n"
                             f"Starts at sign-in: {'yes' if winsetup.autostart_enabled() else 'no'}",
                   justify="left").grid(column=0, row=3, columnspan=2, sticky="w")
-        ttk.Label(frm, text="To move this PC to another site, create a new pairing code in GrainTime and pair again.",
+        ttk.Label(frm, text="To install a newer version, open its GrainTimeAgent.exe and click Update (the pairing is "
+                            "kept). To move this PC to another site, create a new pairing code and pair again.",
                   wraplength=420, foreground="#555").grid(column=0, row=4, columnspan=2, sticky="w", pady=(6, 10))
 
     ttk.Label(frm, text="GrainTime address").grid(column=0, row=5, sticky="w")
@@ -69,6 +70,20 @@ def run_setup_window() -> None:
                             "in GrainTime to start collecting.")
         root.destroy()
 
+    def do_update():
+        """Replace the installed agent with this copy; keep the pairing."""
+        try:
+            winsetup.stop_running_agents()
+            exe = winsetup.install_copy()
+            winsetup.enable_autostart(exe)
+            winsetup.start_background(exe)
+        except OSError as exc:
+            messagebox.showerror("GrainTime Agent", f"Could not update the agent:\n{exc}")
+            return
+        messagebox.showinfo("GrainTime Agent", f"Updated to version {VERSION}. The agent is running again, "
+                                               f"still paired with {state['site']['name']}.")
+        root.destroy()
+
     def do_remove():
         if not messagebox.askyesno("GrainTime Agent", "Stop the agent on this PC and forget its pairing?"):
             return
@@ -82,5 +97,7 @@ def run_setup_window() -> None:
     btns.grid(column=0, row=8, columnspan=2, sticky="e")
     if state:
         ttk.Button(btns, text="Remove from this PC", command=do_remove).grid(column=0, row=0, padx=4)
+        if winsetup.is_frozen() and not winsetup.running_from_install():
+            ttk.Button(btns, text=f"Update this PC to {VERSION}", command=do_update).grid(column=2, row=0, padx=4)
     ttk.Button(btns, text="Pair again" if state else "Pair", command=do_pair).grid(column=1, row=0)
     root.mainloop()

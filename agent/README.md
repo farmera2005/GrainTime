@@ -46,7 +46,10 @@ runs on the scale PC, reads the tickets read-only, and sends them to GrainTime.
    to check the tickets look right, turn **Polling** on, and run a **Backfill**
    if you want history (the PC holds tickets back to 2023 at New Weston).
 
-To move the agent to another PC, create a new pairing code and pair there; to
+To update the agent, download the newer GrainTimeAgent.exe, open it on the
+scale PC (as the same account) and click **Update this PC to <version>**: it
+replaces the installed copy and restarts it, keeping the pairing. To move the
+agent to another PC, create a new pairing code and pair there; to
 stop it, click **Disconnect the PC** in GrainTime and **Remove from this PC**
 in the agent window.
 

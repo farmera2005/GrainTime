@@ -32,14 +32,30 @@ def is_frozen() -> bool:
 
 
 def install_copy() -> Path:
-    """Copy the running .exe into the app folder (frozen builds only)."""
+    """Copy the running .exe into the app folder (frozen builds only). Retries
+    briefly: a just-stopped older copy can hold the file for a moment."""
+    import time
     target = installed_exe()
     if is_frozen():
         src = Path(sys.executable)
         if src.resolve() != target.resolve():
-            shutil.copy2(src, target)
+            for attempt in range(10):
+                try:
+                    shutil.copy2(src, target)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(1)
         return target
     return Path(sys.executable)
+
+
+def running_from_install() -> bool:
+    try:
+        return Path(sys.executable).resolve() == installed_exe().resolve()
+    except OSError:
+        return False
 
 
 def enable_autostart(exe: Path) -> None:
