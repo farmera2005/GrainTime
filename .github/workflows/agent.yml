@@ -8,6 +8,8 @@
 name: GrainTime Agent (Windows build)
 on:
   push:
+    # Both must be listed: with tags alone, GitHub ignores branch pushes.
+    branches: ["**"]
     tags: ["agent-v*"]
     paths:
       - "agent/**"
